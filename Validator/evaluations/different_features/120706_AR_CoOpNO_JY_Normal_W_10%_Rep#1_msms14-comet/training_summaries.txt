@@ -1,0 +1,70 @@
+##### no_mhc_predictions-no_seq_encoding #####
+----- PSMS AND PEPTIDES -----
+Target PSMs at 1% FDR: 4955
+Unique peptides at 1% FDR: 982
+
+----- MODEL TRAINING, VALIDATION, TESTING -----
+Training loss: 1.582 - Validation loss: 1.566 - Testing loss: 1.575
+Training accuracy: 0.68 - Validation accuracy: 0.683 - Testing accuracy: 0.676
+
+
+##### no_mhc_predictions-yes_seq_encoding #####
+----- PSMS AND PEPTIDES -----
+Target PSMs at 1% FDR: 7246
+Unique peptides at 1% FDR: 1472
+
+----- MODEL TRAINING, VALIDATION, TESTING -----
+Training loss: 1.6 - Validation loss: 1.564 - Testing loss: 1.648
+Training accuracy: 0.766 - Validation accuracy: 0.76 - Testing accuracy: 0.724
+
+
+##### mhcflurry-yes_seq_encoding #####
+----- PSMS AND PEPTIDES -----
+Target PSMs at 1% FDR: 7869
+Unique peptides at 1% FDR: 1632
+
+----- MODEL TRAINING, VALIDATION, TESTING -----
+Training loss: 1.206 - Validation loss: 1.191 - Testing loss: 1.274
+Training accuracy: 0.761 - Validation accuracy: 0.748 - Testing accuracy: 0.721
+
+
+##### netmhcpan-no_seq_encoding #####
+----- PSMS AND PEPTIDES -----
+Target PSMs at 1% FDR: 7749
+Unique peptides at 1% FDR: 1557
+
+----- MODEL TRAINING, VALIDATION, TESTING -----
+Training loss: 1.248 - Validation loss: 1.242 - Testing loss: 1.261
+Training accuracy: 0.76 - Validation accuracy: 0.762 - Testing accuracy: 0.746
+
+
+##### netmhcpan-yes_seq_encoding #####
+----- PSMS AND PEPTIDES -----
+Target PSMs at 1% FDR: 8049
+Unique peptides at 1% FDR: 1675
+
+----- MODEL TRAINING, VALIDATION, TESTING -----
+Training loss: 1.106 - Validation loss: 1.18 - Testing loss: 1.331
+Training accuracy: 0.77 - Validation accuracy: 0.754 - Testing accuracy: 0.733
+
+
+##### mhcflurry+netmhcpan-no_seq_encoding #####
+----- PSMS AND PEPTIDES -----
+Target PSMs at 1% FDR: 7888
+Unique peptides at 1% FDR: 1610
+
+----- MODEL TRAINING, VALIDATION, TESTING -----
+Training loss: 1.218 - Validation loss: 1.192 - Testing loss: 1.37
+Training accuracy: 0.76 - Validation accuracy: 0.767 - Testing accuracy: 0.75
+
+
+##### mhcflurry+nemhcpan-yes_seq_encoding #####
+----- PSMS AND PEPTIDES -----
+Target PSMs at 1% FDR: 8061
+Unique peptides at 1% FDR: 1678
+
+----- MODEL TRAINING, VALIDATION, TESTING -----
+Training loss: 1.159 - Validation loss: 1.074 - Testing loss: 1.317
+Training accuracy: 0.763 - Validation accuracy: 0.765 - Testing accuracy: 0.741
+
+

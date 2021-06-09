@@ -1,0 +1,8 @@
+crap database created using OpenMS in this fashion:
+- starting material: swiss prot saccharomyces cerevisiae fasta file
+- created "targets" by generating a shuffled decoy database, enzyme=no digest, seed=1
+	- No prefix attached, so they will look like targets
+- created "decoy" by generating a reverse decoy database of the "fake target" database, enzyme=no digest, seed=1234
+	- Given prefix of "rev_" so they will look like the decoy database
+
+Searched with Comet 2020 rev 3

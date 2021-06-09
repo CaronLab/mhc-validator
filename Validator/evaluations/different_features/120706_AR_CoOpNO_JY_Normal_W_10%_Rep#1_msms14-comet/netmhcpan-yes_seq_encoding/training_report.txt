@@ -1,0 +1,7 @@
+----- PSMS AND PEPTIDES -----
+Target PSMs at 1% FDR: 8049
+Unique peptides at 1% FDR: 1675
+
+----- MODEL TRAINING, VALIDATION, TESTING -----
+Training loss: 1.106 - Validation loss: 1.18 - Testing loss: 1.331
+Training accuracy: 0.77 - Validation accuracy: 0.754 - Testing accuracy: 0.733
