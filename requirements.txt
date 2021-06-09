@@ -1,0 +1,10 @@
+mhcflurry
+tensorflow<2.3
+numpy
+pandas
+mhcnames
+pyteomics
+lxml
+matplotlib
+modlamp
+mhcnuggets
