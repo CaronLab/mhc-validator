@@ -23,6 +23,7 @@ from mhcnames import normalize_allele_name, parse_allele_name
 from copy import deepcopy
 from scipy.stats import percentileofscore
 from sklearn.model_selection import StratifiedKFold
+from sklearn.preprocessing import MinMaxScaler
 from datetime import datetime
 from Validator.callbacks import SimpleEpochProgressMonitor
 from Validator.encoding import pad_and_encode_multiple_aa_seq
@@ -429,8 +430,8 @@ class Validator:
                                epochs: int = 10,
                                batch_size: int = 64,
                                loss_fn=tf.losses.BinaryCrossentropy(),  # =weighted_bce(10, 2, 0.5),
-                               holdout_split: float = 0.25,
-                               validation_split: float = 0.25,
+                               holdout_split: float = 0.5,
+                               validation_split: float = 0.1,
                                subset: np.array = None,
                                weight_samples: bool = False,
                                decoy_factor=1,
@@ -455,10 +456,14 @@ class Validator:
         if random_seed is None:
             random_seed = self.random_seed
 
+        input_scalar = MinMaxScaler()
+
         # save X and y before we do any shuffling. We will need this in the original order for predictions later
         self.X = deepcopy(X)
         self.y = deepcopy(y)
-        self.X = keras.utils.normalize(self.X, 0)
+        #self.X = keras.utils.normalize(self.X, 0)
+        input_scalar.fit(self.X)
+        self.X = input_scalar.transform(self.X)
 
         if encode_peptide_sequences:
             # add encoded sequences to self.X
@@ -522,9 +527,10 @@ class Validator:
         #X_train, y_train, X_train_peps = X_train[idx], y_train[idx], X_train_peps[idx]
 
         # normalize everything
-        X_train = keras.utils.normalize(X_train, 0)
-        X_test = keras.utils.normalize(X_test, 0)
-
+        input_scalar.fit(X_train)
+        X_train = input_scalar.transform(X_train)  # keras.utils.normalize(X_train, 0)
+        input_scalar.fit(X_test)
+        X_test = input_scalar.transform(X_test)  # keras.utils.normalize(X_test, 0)
         if encode_peptide_sequences:
             # training peptides
             if lstm_model:
@@ -949,25 +955,24 @@ class Validator:
         plt.legend(['train', 'validate'], loc='upper left')
         plt.show()'''
 
-        test_predictions = self.model.predict(self.X_train)
-        plt.hist(x=np.array(test_predictions[self.y_train == 0]).flatten(),
-                 label='Decoy', bins=30, alpha=0.6)
-        plt.hist(x=np.array(test_predictions[self.y_train == 1]).flatten(),
-                 label='Target', bins=30, alpha=0.6)
+        train_predictions = self.model.predict(self.X_train)
+        _, bins, _ = plt.hist(x=np.array(train_predictions[self.y_train == 0]).flatten(),
+                              label='Decoy', bins=30, alpha=0.6)
+        plt.hist(x=np.array(train_predictions[self.y_train == 1]).flatten(),
+                 label='Target', bins=30, alpha=0.6, range=(bins[0], bins[-1]))
         plt.title('Training data')
         if log_yscale:
             plt.yscale('log')
         plt.legend()
-        plt.tight_layout()
         if outdir is not None:
             plt.savefig(str(Path(outdir, 'training_distribution.svg')))
         plt.show()
 
         test_predictions = self.model.predict(self.X_test)
-        plt.hist(x=np.array(test_predictions[self.y_test == 0]).flatten(),
-                 label='Decoy', bins=30, alpha=0.6)
+        _, bins, _ = plt.hist(x=np.array(test_predictions[self.y_test == 0]).flatten(),
+                              label='Decoy', bins=30, alpha=0.6)
         plt.hist(x=np.array(test_predictions[self.y_test == 1]).flatten(),
-                 label='Target', bins=30, alpha=0.6)
+                 label='Target', bins=30, alpha=0.6, range=(bins[0], bins[-1]))
         plt.title('Testing data')
         if log_yscale:
             plt.yscale('log')
@@ -977,8 +982,9 @@ class Validator:
         plt.show()
 
         predictions = self.predictions
-        plt.hist(x=np.array(predictions[self.y == 0]).flatten(), label='Decoy', bins=30, alpha=0.6)
-        plt.hist(x=np.array(predictions[self.y == 1]).flatten(), label='Target', bins=30, alpha=0.6)
+        _, bins, _ = plt.hist(x=np.array(predictions[self.y == 0]).flatten(), label='Decoy', bins=30, alpha=0.6)
+        plt.hist(x=np.array(predictions[self.y == 1]).flatten(), label='Target', bins=30, alpha=0.6,
+                 range=(bins[0], bins[-1]))
         plt.title('All data')
         if log_yscale:
             plt.yscale('log')
