@@ -31,7 +31,7 @@ from Validator.mhcnugget_helper import get_mhcnuggets_preds
 import tempfile
 # This can be uncommented to prevent the GPU from getting used.
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+#os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 from scipy.stats import gmean as geom_mean
 
