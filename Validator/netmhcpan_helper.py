@@ -10,9 +10,10 @@ from multiprocessing import Pool
 from uuid import uuid4
 from mhcnames import normalize_allele_name, compact_allele_name
 import pandas as pd
+import tempfile
 
 common_aa = "ARNDCQEGHILKMFPSTWYV"
-TMP_DIR = str(Path('/tmp/pynetmhcpan').expanduser())
+TMP_DIR = str(Path(tempfile.gettempdir(), 'pynetmhcpan').expanduser())
 NETMHCPAN = 'netMHCpan'
 NETMHCIIPAN = 'netMHCIIpan'
 

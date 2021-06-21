@@ -14,7 +14,7 @@ from Validator.predictions_parsers import add_mhcflurry_to_feature_matrix, add_n
 from Validator.netmhcpan_helper import NetMHCpanHelper, format_class_II_allele
 from Validator.constants import COMMON_AA, SUPERTYPES
 from Validator.losses_and_metrics import weighted_bce, total_fdr, precision_m
-from Validator.fdr import calculate_qs
+from Validator.fdr import calculate_qs, calculate_peptide_level_qs
 import matplotlib.pyplot as plt
 from mhcflurry.encodable_sequences import EncodableSequences
 from Validator.models import get_model_without_peptide_encoding, get_bigger_model_with_peptide_encoding2, get_model_with_lstm_peptide_encoding
@@ -27,7 +27,12 @@ from sklearn.preprocessing import MinMaxScaler
 from datetime import datetime
 from Validator.callbacks import SimpleEpochProgressMonitor
 from Validator.encoding import pad_and_encode_multiple_aa_seq
-from Validator.mhcnugget_helpers import get_mhcnuggets_preds
+from Validator.mhcnugget_helper import get_mhcnuggets_preds
+import tempfile
+# This can be uncommented to prevent the GPU from getting used.
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
 from scipy.stats import gmean as geom_mean
 
 #tf.config.threading.set_inter_op_parallelism_threads(0)
@@ -35,8 +40,11 @@ from scipy.stats import gmean as geom_mean
 #tf.config.set_soft_device_placement(enabled=True)
 
 
+DEFAULT_TEMP_MODEL_DIR = str(Path(tempfile.gettempdir()) / 'validator_models')
+
+
 class Validator:
-    def __init__(self, random_seed: int = 1234, model_dir: Union[str, PathLike] = '/tmp/validator_models'):
+    def __init__(self, random_seed: int = 1234, model_dir: Union[str, PathLike] = DEFAULT_TEMP_MODEL_DIR):
         self.filename: str = None
         self.filepath: Path = None
         self.model = None
@@ -97,22 +105,6 @@ class Validator:
         print(f'Minimum peptide length: {self.min_len}')
         print(f'Maximum peptide length: {self.max_len}')
 
-        if filetype == 'auto':
-            if str(filename).lower().endswith('pin'):
-                filetype = 'pin'
-            elif str(filename).lower().endswith('pepxml'):
-                filetype = 'tandem'
-            elif str(filename).lower().endswith('pep.xml'):
-                filetype = 'pepxml'
-            elif str(filename).lower().endswith('mzid'):
-                filetype = 'mzid'
-            else:
-                raise ValueError('File type could not be inferred from filename. You must explicitly specify the '
-                                 'filetype.')
-        else:
-            if filetype not in ['pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'auto']:
-                raise ValueError("filetype must be one of ['pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'auto']")
-
         print('Loading PSM file')
         self.raw_data = load_file(filename=filename, filetype=filetype, decoy_tag=decoy_tag,
                                   protein_column=protein_column, file_sep=file_delimiter,
@@ -123,6 +115,8 @@ class Validator:
             self.peptides = list(self.raw_data['Peptide'])
         elif filetype == 'mzid':
             self.peptides = list(self.raw_data['PeptideSequence'])
+        elif filetype == 'spectromine':
+            self.peptides = list(self.raw_data['PEP.StrippedSequence'])
         else:
             self.peptides = list(self.raw_data['peptide'])
         self.peptides = np.array(clean_peptide_sequences(self.peptides))
@@ -258,7 +252,7 @@ class Validator:
         else:
             alleles = self.alleles
 
-        preds = get_mhcnuggets_preds(self.mhc_class, self.alleles, self.peptides)
+        preds = get_mhcnuggets_preds(self.mhc_class, alleles, self.peptides)
         self.feature_matrix = self.feature_matrix.join(preds)
 
     def add_all_available_predictions(self, verbose_errors: bool = False):
@@ -614,16 +608,21 @@ class Validator:
                                           validation_split=validation_split)
 
         self.predictions = self.model.predict(self.X).flatten()
+        print('Calculating PSM-level q-values')
         self.qs = calculate_qs(self.predictions, self.y, higher_better=True)
+        print('Calculating peptide-level q-values')
+        pep_qs, pep_ys, peps = calculate_peptide_level_qs(self.predictions, self.y, self.peptides)
         qs = self.qs[self.y == 1]
         self.roc = np.sum(qs <= qs[:, np.newaxis], axis=1)
-        target_mask = (self.qs <= 0.01) & (self.y == 1)
-        n_targets = np.sum(target_mask)
-        n_unique = len(np.unique(self.peptides[target_mask]))
+        psm_target_mask = (self.qs <= 0.01) & (self.y == 1)
+        n_psm_targets = np.sum(psm_target_mask)
+        n_unique_psms = len(np.unique(self.peptides[psm_target_mask]))
+        n_unique_peps = np.sum((pep_qs <= 0.01) & (pep_ys == 1))
         evaluate = self.model.evaluate(self.X_test, self.y_test, batch_size=batch_size, verbose=0)
         report = '----- PSMS AND PEPTIDES -----\n'\
-                 f'Target PSMs at 1% FDR: {n_targets}\n'\
-                 f'Unique peptides at 1% FDR: {n_unique}\n' \
+                 f'Target PSMs at 1% FDR: {n_psm_targets}\n'\
+                 f'Unique peptides at 1% PSM-level FDR: {n_unique_psms}\n' \
+                 f'Unique peptides at 1% peptide-level FDR: {n_unique_peps}\n' \
                  f'\n' \
                  f'----- MODEL TRAINING, VALIDATION, TESTING -----\n'\
                  f'Training loss: {round(self.fit_history.history["loss"][-1], 3)} - '\

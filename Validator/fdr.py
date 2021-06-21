@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+from numba import njit, jit
+from typing import List, Union, Iterable
 
 
 def calculate_qs(metrics, labels, higher_better: bool = True):
@@ -15,6 +17,43 @@ def calculate_qs(metrics, labels, higher_better: bool = True):
         targets = np.sum(x[:, np.newaxis] >= targets, axis=1)
         decoys = np.sum(x[:, np.newaxis] >= decoys, axis=1)
     qs = decoys / targets
+
+    return qs
+
+
+@jit(nopython=True)
+def calculate_qs_fast(metrics: np.ndarray, labels: np.ndarray, higher_better: bool = True):
+    x = metrics
+    y = labels
+
+    qs = np.empty_like(x)
+
+    for i in range(x.shape[0]):
+        n_targets = 0
+        n_decoys = 0
+        for j in range(x.shape[0]):
+            if x[j] >= x[i] if higher_better else x[j] <= x[i]:
+                if y[j] == 1:
+                    n_targets += 1
+                else:
+                    n_decoys += 1
+        qs[i] = n_decoys / n_targets
+
+    return qs
+
+
+@jit(nopython=True)
+def calculate_qs_fast2(metrics: np.ndarray, labels: np.ndarray, higher_better: bool = True):
+    x = metrics.flatten()
+    y = labels.flatten()
+
+    qs = np.empty_like(x)
+
+    for i in range(len(x)):
+        better = x >= x[i] if higher_better else x <= x[i]
+        n_targets = np.sum(better & (y == 1))
+        n_decoys = np.sum(better & (y == 0))
+        qs[i] = n_decoys / n_targets
 
     return qs
 

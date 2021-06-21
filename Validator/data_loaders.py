@@ -67,6 +67,39 @@ def load_tabular_data(filepath: Union[str, Path],
     return df
 
 
+def load_spectromine_data(filepath: Union[str, Path],
+                          sep='\t'):
+    """
+    Loads a tabular file into a Pandas DataFrame. If there are ragged entries (i.e. not all row
+    lengths are the same), then it is assumed the last column is proteins any ragged entries are joined
+    with the special separator '@@' (chosen because it is extremely unlikely that
+    we will ever encounter such a string in a FASTA file by chance.)
+
+    :param filepath: Path to the tabular file
+    :param id_column: A column to use for the dataframe index. Optional.
+    :param decoy_prefix: The decoy prefix from the database search. Optional
+    :param protein_column: The name of the column containing protein IDs. Optional.
+    :param sep: The column delimiter. Must be the literal separator, not a word. E.g. use "\t" for TSV or "," fot CSV
+    :return: A Pandas Dataframe containing the loaded data
+    """
+    if not isinstance(sep, str):
+        raise TypeError('sep must be a string')
+
+    with open(filepath, 'r') as f:
+        header = f.readline().rstrip().split(sep)
+        contents = [x.rstrip().split(sep) for x in f.readlines()]
+    n_columns = len(header)
+    new_contents = []
+    for line in contents:
+        new_contents.append(line[:n_columns - 1] + ['@@'.join(line[n_columns - 1:])])
+    df = pd.DataFrame(data=new_contents, columns=header)
+    apply_target_decoy_label_function(df=df,
+                                      func=lambda x: 0 if x == 'True' else 1,
+                                      column='PSM.IsDecoy',
+                                      in_place=True)
+    return df
+
+
 def load_pin_data(filepath: Union[str, Path],
                   decoy_tag: str = 'rev_',
                   tag_is_prefix: bool = True,
@@ -352,8 +385,8 @@ def load_file(filename: Union[str, PathLike],
             raise ValueError('File type could not be inferred from filename. You must explicitly specify the '
                              'filetype.')
     else:
-        if filetype not in ['pin', 'pepxml', 'tabular', 'mzid', 'tandem']:
-            raise ValueError("filetype must be one of ['pin', 'pepxml', 'tabular', 'mzid', 'tandem']")
+        if filetype not in ['pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine']:
+            raise ValueError("filetype must be one of ['pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine']")
 
     if filetype == 'pin':
         df = load_pin_data(filename, decoy_tag=decoy_tag, protein_column=protein_column, tag_is_prefix=tag_is_prefix)
@@ -367,6 +400,9 @@ def load_file(filename: Union[str, PathLike],
     elif filetype == 'tandem':
         df = load_tandem_data(filename, decoy_prefix=decoy_tag)
         pep_col = 'peptide' if 'peptide' in df else 'Peptide'
+    elif filetype == 'spectromine':
+        df = load_spectromine_data(filename)
+        pep_col = 'PEP.StrippedSequence'
     else:
         if not protein_column:
             raise ValueError("the protein_column argument must be specified for arbitrary tabular data.")

@@ -35,8 +35,8 @@ def prepare_features(data, filetype, use_features: Union[List[str], None]):
     :param use_features:
     :return:
     """
-    if filetype not in ['pin', 'pout', 'pepxml', 'tabular', 'mzid', 'tandem']:
-        raise ValueError("filetype must be one of ['pin', 'pout', 'pepxml', 'tabular', 'mzid', 'tandem']")
+    if filetype not in ['pin', 'pout', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine']:
+        raise ValueError("filetype must be one of ['pin', 'pout', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine']")
     if filetype == 'pepxml':
         return prepare_pepxml_features(data, use_features)
     elif filetype == 'mzid':
@@ -49,8 +49,41 @@ def prepare_features(data, filetype, use_features: Union[List[str], None]):
         return prepare_tandem_features(data, use_features)
     elif filetype == 'tabular':
         return prepare_tabular_features(data, use_features)
+    elif filetype == 'spectromine':
+        return prepare_spectromine_features(data, use_features)
     else:
         return prepare_pout_features(data, use_features)
+
+
+def prepare_spectromine_features(data,
+                                 use_features: Union[List[str], None],
+                                 include_cleavage_metrics: bool = False):
+    features = pd.DataFrame()
+    if use_features:
+        for f in use_features:
+            features[f] = data[f]
+        search_scores = []
+    else:
+        use_columns = ['PEP.PeptideLength', 'PEP.RunEvidenceCount', 'PEP.Score', 'PP.Charge', 'PSM.Search',
+                       'PSM.DeltaMS1MZ(Theor-Cali)', 'PSM.DeltaMS1MZ(Theor-Meas)',
+                       'PSM.NrOfMatchedMS2Ions', 'PSM.Score', 'PSM.CalibratedMS1MZ', 'PSM.MeasuredMS1MZ']
+        for f in use_columns:
+            features[f] = data[f].astype(np.float32)
+
+        charges = pd.get_dummies(data['PP.Charge'], prefix='PP.Charge')
+        features = features.join(charges)
+        features.drop(columns=['PP.Charge'], inplace=True)
+
+        peptide_counts = Counter(data['PEP.StrippedSequence'])
+        features['V.NPeptideMatches'] = \
+            np.vectorize(lambda x: peptide_counts[x])(data['PEP.StrippedSequence']).astype(np.float32)
+
+        features['V.MatchedIonFraction'] = features['PSM.NrOfMatchedMS2Ions'] / (features['PEP.PeptideLength'] * 2)
+
+        features['V.CalibratedAbsPPM'] = features['PSM.DeltaMS1MZ(Theor-Cali)'] / features['PSM.CalibratedMS1MZ'] * 1e6
+        features['V.MeasuredAbsPPM'] = features['PSM.DeltaMS1MZ(Theor-Meas)'] / features['PSM.MeasuredMS1MZ'] * 1e6
+
+    return features
 
 
 def prepare_pepxml_features(data,
