@@ -105,7 +105,7 @@ class Validator:
         print(f'Minimum peptide length: {self.min_len}')
         print(f'Maximum peptide length: {self.max_len}')
 
-        print('Loading PSM file')
+        print('Loading PSM file...')
         self.raw_data = load_file(filename=filename, filetype=filetype, decoy_tag=decoy_tag,
                                   protein_column=protein_column, file_sep=file_delimiter,
                                   tag_is_prefix=tag_is_prefix, min_len=self.min_len, max_len=self.max_len)
@@ -120,6 +120,8 @@ class Validator:
         else:
             self.peptides = list(self.raw_data['peptide'])
         self.peptides = np.array(clean_peptide_sequences(self.peptides))
+
+        print(f'Loaded {len(self.peptides)} PSMs')
 
         self.loaded_filetype = filetype
         self.filename = Path(filename).name
