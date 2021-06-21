@@ -62,7 +62,6 @@ def prepare_spectromine_features(data,
     if use_features:
         for f in use_features:
             features[f] = data[f]
-        search_scores = []
     else:
         use_columns = ['PEP.PeptideLength', 'PEP.RunEvidenceCount', 'PEP.Score', 'PP.Charge', 'PSM.Search',
                        'PSM.DeltaMS1MZ(Theor-Cali)', 'PSM.DeltaMS1MZ(Theor-Meas)',
@@ -73,6 +72,11 @@ def prepare_spectromine_features(data,
         charges = pd.get_dummies(data['PP.Charge'], prefix='PP.Charge')
         features = features.join(charges)
         features.drop(columns=['PP.Charge'], inplace=True)
+
+        if 'R.FileName' in data.columns:
+            filenames = pd.get_dummies(data['R.FileName'], prefix='R.FileName')
+            features = features.join(filenames)
+            features.drop(columns=['R.FileName'], inplace=True)
 
         peptide_counts = Counter(data['PEP.StrippedSequence'])
         features['V.NPeptideMatches'] = \
