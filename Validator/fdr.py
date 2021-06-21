@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
 from numba import njit, jit
+from tqdm import tqdm
 from typing import List, Union, Iterable
+from copy import deepcopy
 
 
 def calculate_qs(metrics, labels, higher_better: bool = True):
@@ -41,6 +43,23 @@ def calculate_qs_fast(metrics: np.ndarray, labels: np.ndarray, higher_better: bo
 
     return qs
 
+def calculate_qs_2(metrics: np.ndarray, labels: np.ndarray, higher_better: bool = True):
+    x = deepcopy(metrics.flatten())
+    y = deepcopy(labels.flatten())
+
+    sorted = x.argsort()
+    x = x[sorted]
+    y = y[sorted]
+
+    qs = np.empty_like(x)
+
+    for i in tqdm(range(x.shape[0])):
+        better = x[i:] >= x[i] if higher_better else x <= x[i:]
+        n_targets = np.sum(better & (y[i:] == 1))
+        n_decoys = np.sum(better & (y[i:] == 0))
+        qs[i] = n_decoys / n_targets
+
+    return qs
 
 @jit(nopython=True)
 def calculate_qs_fast2(metrics: np.ndarray, labels: np.ndarray, higher_better: bool = True):
