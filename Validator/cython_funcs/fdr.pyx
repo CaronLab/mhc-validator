@@ -1,72 +1,96 @@
 import numpy as np
-import pandas as pd
-from numba import njit, jit
-from tqdm import tqdm
-from typing import List, Union, Iterable
-from copy import deepcopy
-import cython
+cimport numpy as np
+cimport cython
+from cython.parallel import prange
 
 
-cdef double[] calculate_qs(np.array[double, dim=1] metrics, np.array[int, dim=1] labels, bool higher_better = True):
-    cdef np.array[double, dim=1] x = metrics
-    cdef np.array[int, dim=1] y = labels
-    cdef double[double, dim=1] qs = np.one(x.shape[0])
-    cdef int i = 0
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
+@cython.cdivision(True)
+def calculate_qs(double[:] metrics, int[:] labels, bint higher_better = True):
+    cdef double[:] x = metrics
+    cdef int[:] y = labels
+    cdef double[:] qs = np.empty_like(x, dtype=np.double)
+    cdef Py_ssize_t i
+    cdef double n_targets, n_decoys
+    cdef Py_ssize_t j
+    cdef Py_ssize_t max_i = len(metrics)
+    cdef bint c
 
-    for i in range(x.shape[0]):
-        cdef int n_targets = 0
-        cdef int n_decoys = 0
-        cdef int j = 0
-        for j in range(x.shape[0]):
-            if (x[j] >= x[i] if higher_better else x[j] <= x[i]):
-                if y[j] == 1:
-                    n_targets += 1
+    assert int(max_i) == len(x) == len(y) == len(qs)
+
+    with nogil:
+        for i in prange(max_i):
+            n_targets = 0
+            n_decoys = 0
+            j = 0
+            for j in range(max_i):
+                if higher_better:
+                    c = x[j] >= x[i]
+                    if c:
+                        if y[j] == 1:
+                            n_targets = n_targets + 1
+                        else:
+                            n_decoys = n_decoys + 1
                 else:
-                    n_decoys += 1
-        qs[i] = n_decoys / n_targets
+                    if x[j] <= x[i]:
+                        if y[j] == 1:
+                            n_targets = n_targets + 1
+                        else:
+                            n_decoys = n_decoys + 1
 
-    return qs
+            qs[i] = n_decoys / n_targets
 
+    return np.asarray(qs)
 
-def calculate_peptide_level_qs(np.array[double, dim=1] metrics,
-                               np.array[int, dim=1] labels,
-                               np.array[str, dim=1] peptides,
-                               bool higher_better = True):
-    cdef np.array[double, dim=1] x
-    cdef np.array[int, dim=1] y
-    cdef double[double, dim=1] qs = np.one(x.shape[0])
-    cdef np.array[str, dim=1] peps
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
+def calculate_peptide_level_qs(double[:] metrics,
+                               int[:] labels,
+                               peptides,
+                               bint higher_better = True):
+    cdef double[:] x
+    cdef int[:] y
 
-    cdef float best_metric
-    cdef str current_peptide
+    cdef int n_peps = len(np.unique(peptides))
+    cdef double[:] best_x = np.empty(n_peps, dtype=np.double)
+    cdef int[:] best_y = np.empty(n_peps, dtype=np.intc)
+    best_peps = np.array(['A'*30]*n_peps, dtype=str)
+
+    cdef double current_metric
+    #cdef str current_peptide
+    cdef Py_ssize_t i
 
     ordered_idx = np.argsort(peptides)
-    x = metrics[ordered_idx]
-    y = labels[ordered_idx]
-    peps = peptides[ordered_idx]
-    ##### CONTINUE FROM HERE
+    x = np.asarray([metrics[i] for i in ordered_idx], dtype=np.double)
+    y = np.asarray([labels[i] for i in ordered_idx], dtype=np.int)
+    peps = np.asarray([peptides[i] for i in ordered_idx], dtype=str)
 
-    grouped_df = df.groupby('peptide')
-    if higher_better:
-        x = grouped_df['metric'].max().to_numpy(np.float32)
-    else:
-        x = grouped_df['metric'].min().to_numpy(np.float32)
-    y = grouped_df['label'].prod().to_numpy(np.float32)
-    peptides = grouped_df['peptide'].first().to_numpy()
+    current_peptide = peps[0]
+    current_metric = x[0]
+    cdef Py_ssize_t pep_idx = 0
+    cdef Py_ssize_t max_i = len(x)
 
-    targets = x[y == 1]
-    decoys = x[y == 0]
-    if higher_better:
-        targets = np.sum(x[:, np.newaxis] <= targets, axis=1)
-        decoys = np.sum(x[:, np.newaxis] <= decoys, axis=1)
-    else:
-        targets = np.sum(x[:, np.newaxis] >= targets, axis=1)
-        decoys = np.sum(x[:, np.newaxis] >= decoys, axis=1)
-    qs = decoys / targets
+    assert int(max_i) == len(x) == len(y)
 
-    return qs, y, peptides
+    for i in range(1, max_i):
+        if peps[i] == current_peptide:
+            if higher_better:
+                if x[i] > current_metric:
+                    current_metric = x[i]
+            else:
+                if x[i] < current_metric:
+                    current_metric = x[i]
+        else:
+            best_x[pep_idx] = current_metric
+            pre_i = i - 1
+            best_y[pep_idx] = y[pre_i]
+            best_peps[pep_idx] = current_peptide
 
+            pep_idx += 1
+            current_peptide = peps[i]
+            current_metric = x[i]
 
-def get_confident_data(X, y, metrics, fdr: float = 0.01, higher_better: bool = True):
-    qs = calculate_qs(metrics, y, higher_better)
-    return X[((y == 1) & (qs <= fdr)) | (y == 0)], y[((y == 1) & (qs <= fdr)) | (y == 0)]
+    qs = calculate_qs(metrics=best_x, labels=best_y, higher_better=higher_better)
+
+    return np.asarray(qs), np.asarray(best_x), np.asarray(best_y), np.asarray(best_peps)
