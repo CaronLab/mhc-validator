@@ -4,104 +4,92 @@ from numba import njit, jit
 from tqdm import tqdm
 from typing import List, Union, Iterable
 from copy import deepcopy
+from collections import Counter
 
 
 def calculate_qs(metrics, labels, higher_better: bool = True):
-    x = metrics.flatten()
-    y = labels.flatten()
+    metrics = np.array(metrics)
+    labels = np.array(labels)
+    ordered_idx = np.argsort(metrics)
+    sorted_metrics = metrics[ordered_idx]
+    sorted_labels = labels[ordered_idx]
+    if not higher_better:
+        sorted_metrics = np.flip(sorted_metrics)
+        sorted_labels = np.flip(sorted_labels)
+        ordered_idx = np.flip(ordered_idx)
 
-    targets = x[y == 1]
-    decoys = x[y == 0]
-    if higher_better:
-        targets = np.sum(x[:, np.newaxis] <= targets, axis=1)
-        decoys = np.sum(x[:, np.newaxis] <= decoys, axis=1)
+    target_counts = Counter(metrics[labels == 1])
+    decoy_counts = Counter(metrics[labels == 0])
+    for key, value in decoy_counts.items():
+        if key not in target_counts:
+            target_counts[key] = 0
+    for key, value in target_counts.items():
+        if key not in decoy_counts:
+            decoy_counts[key] = 0
+
+    qs = np.ones_like(metrics, dtype=float)
+    N_targets = np.sum(labels == 1)
+    N_decoys = np.sum(labels == 0)
+
+    for i in range(len(sorted_metrics)):
+        if i == len(sorted_metrics) - 1:
+            if sorted_labels[i] == 1:
+                qs[ordered_idx[i]] = 0
+            else:
+                qs[ordered_idx[i]] = 1
+            continue
+        qs[ordered_idx[i]] = N_decoys / N_targets
+
+        if sorted_metrics[i+1] != sorted_metrics[i]:
+            N_targets -= target_counts[sorted_metrics[i]]
+            N_decoys -= decoy_counts[sorted_metrics[i]]
+
+    if not higher_better:
+        return np.flip(qs)
     else:
-        targets = np.sum(x[:, np.newaxis] >= targets, axis=1)
-        decoys = np.sum(x[:, np.newaxis] >= decoys, axis=1)
-    qs = decoys / targets
-
-    return qs
+        return qs
 
 
-@jit(nopython=True)
-def calculate_qs_fast(metrics: np.ndarray, labels: np.ndarray, higher_better: bool = True):
-    x = metrics
-    y = labels
+def calculate_peptide_level_qs(metrics, labels, peptides, higher_better = True):
 
-    qs = np.empty_like(x)
+    n_peps = len(np.unique(peptides))
+    best_x = np.empty(n_peps, dtype=np.double)
+    best_y = np.empty(n_peps, dtype=np.intc)
+    best_peps = np.empty(n_peps, dtype=str)
 
-    for i in range(x.shape[0]):
-        n_targets = 0
-        n_decoys = 0
-        for j in range(x.shape[0]):
-            if x[j] >= x[i] if higher_better else x[j] <= x[i]:
-                if y[j] == 1:
-                    n_targets += 1
-                else:
-                    n_decoys += 1
-        qs[i] = n_decoys / n_targets
+    ordered_idx = np.argsort(peptides)
+    x = np.asarray([metrics[i] for i in ordered_idx], dtype=np.double)
+    y = np.asarray([labels[i] for i in ordered_idx], dtype=np.int)
+    peps = np.asarray([peptides[i] for i in ordered_idx], dtype=str)
 
-    return qs
+    current_peptide = peps[0]
+    current_metric = x[0]
+    pep_idx = 0
+    max_i = len(x)
 
-def calculate_qs_2(metrics: np.ndarray, labels: np.ndarray, higher_better: bool = True):
-    x = deepcopy(metrics.flatten())
-    y = deepcopy(labels.flatten())
+    assert int(max_i) == len(x) == len(y)
 
-    sorted = x.argsort()
-    x = x[sorted]
-    y = y[sorted]
+    for i in range(1, max_i):
+        if peps[i] == current_peptide:
+            if higher_better:
+                if x[i] > current_metric:
+                    current_metric = x[i]
+            else:
+                if x[i] < current_metric:
+                    current_metric = x[i]
+        else:
+            best_x[pep_idx] = current_metric
+            pre_i = i - 1
+            best_y[pep_idx] = y[pre_i]
+            best_peps[pep_idx] = current_peptide
 
-    qs = np.empty_like(x)
+            pep_idx += 1
+            current_peptide = peps[i]
+            current_metric = x[i]
 
-    for i in tqdm(range(x.shape[0])):
-        better = x[i:] >= x[i] if higher_better else x <= x[i:]
-        n_targets = np.sum(better & (y[i:] == 1))
-        n_decoys = np.sum(better & (y[i:] == 0))
-        qs[i] = n_decoys / n_targets
+    qs = calculate_qs(metrics=best_x, labels=best_y, higher_better=higher_better)
 
-    return qs
-
-@jit(nopython=True)
-def calculate_qs_fast2(metrics: np.ndarray, labels: np.ndarray, higher_better: bool = True):
-    x = metrics.flatten()
-    y = labels.flatten()
-
-    qs = np.empty_like(x)
-
-    for i in range(len(x)):
-        better = x >= x[i] if higher_better else x <= x[i]
-        n_targets = np.sum(better & (y == 1))
-        n_decoys = np.sum(better & (y == 0))
-        qs[i] = n_decoys / n_targets
-
-    return qs
-
-
-def calculate_peptide_level_qs(metrics, labels, peptides, higher_better: bool = True):
-    df = pd.DataFrame()
-    df['label'] = list(labels)
-    df['metric'] = list(metrics)
-    df['peptide'] = list(peptides)
-
-    grouped_df = df.groupby('peptide')
-    if higher_better:
-        x = grouped_df['metric'].max().to_numpy(np.float32)
-    else:
-        x = grouped_df['metric'].min().to_numpy(np.float32)
-    y = grouped_df['label'].prod().to_numpy(np.float32)
-    peptides = grouped_df['peptide'].first().to_numpy()
-
-    targets = x[y == 1]
-    decoys = x[y == 0]
-    if higher_better:
-        targets = np.sum(x[:, np.newaxis] <= targets, axis=1)
-        decoys = np.sum(x[:, np.newaxis] <= decoys, axis=1)
-    else:
-        targets = np.sum(x[:, np.newaxis] >= targets, axis=1)
-        decoys = np.sum(x[:, np.newaxis] >= decoys, axis=1)
-    qs = decoys / targets
-
-    return qs, y, peptides
+    return np.asarray(qs), np.asarray(best_x), np.asarray(best_y), np.asarray(best_peps)
 
 
 def get_confident_data(X, y, metrics, fdr: float = 0.01, higher_better: bool = True):
