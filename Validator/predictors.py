@@ -14,7 +14,8 @@ from Validator.predictions_parsers import add_mhcflurry_to_feature_matrix, add_n
 from Validator.netmhcpan_helper import NetMHCpanHelper, format_class_II_allele
 from Validator.constants import COMMON_AA, SUPERTYPES
 from Validator.losses_and_metrics import weighted_bce, total_fdr, precision_m
-from Validator.fdr import calculate_qs, calculate_peptide_level_qs, calculate_qs_2
+from Validator.fdr import calculate_qs
+from Validator.fdr import calculate_peptide_level_qs
 import matplotlib.pyplot as plt
 from mhcflurry.encodable_sequences import EncodableSequences
 from Validator.models import get_model_without_peptide_encoding, get_bigger_model_with_peptide_encoding2, get_model_with_lstm_peptide_encoding
@@ -30,8 +31,8 @@ from Validator.encoding import pad_and_encode_multiple_aa_seq
 from Validator.mhcnugget_helper import get_mhcnuggets_preds
 import tempfile
 # This can be uncommented to prevent the GPU from getting used.
-#import os
-#os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 from scipy.stats import gmean as geom_mean
 
@@ -611,9 +612,10 @@ class Validator:
 
         self.predictions = self.model.predict(self.X).flatten()
         print('Calculating PSM-level q-values')
-        self.qs = calculate_qs_2(self.predictions, self.y, higher_better=True)
+        self.qs = calculate_qs(self.predictions.astype(np.double), self.y.astype(np.int), higher_better=True)
+        self.qs = np.asarray(self.qs, dtype=float)
         print('Calculating peptide-level q-values')
-        pep_qs, pep_ys, peps = calculate_peptide_level_qs(self.predictions, self.y, self.peptides)
+        pep_qs, pep_xs, pep_ys, peps = calculate_peptide_level_qs(self.predictions.astype(np.double), self.y.astype(np.int), self.peptides)
         qs = self.qs[self.y == 1]
         self.roc = np.sum(qs <= qs[:, np.newaxis], axis=1)
         psm_target_mask = (self.qs <= 0.01) & (self.y == 1)
