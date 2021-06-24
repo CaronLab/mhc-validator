@@ -50,6 +50,22 @@ def calculate_qs(metrics, labels, higher_better: bool = True):
         return qs
 
 
+def calculate_roc(qs, labels):
+    qs = np.array(qs)
+    qs = qs[labels == 1]
+    qs = np.sort(qs)
+    qs, counts = np.unique(qs, return_counts=True) # Counter(qs)
+
+    N = 0
+    n_psms = np.empty_like(qs, dtype=float)
+
+    for i in range(len(qs)):
+        N += counts[i]
+        n_psms[i] = N
+
+    return [qs, n_psms]
+
+
 def calculate_peptide_level_qs(metrics, labels, peptides, higher_better = True):
 
     n_peps = len(np.unique(peptides))

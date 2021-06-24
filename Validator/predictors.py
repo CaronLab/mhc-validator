@@ -14,8 +14,7 @@ from Validator.predictions_parsers import add_mhcflurry_to_feature_matrix, add_n
 from Validator.netmhcpan_helper import NetMHCpanHelper, format_class_II_allele
 from Validator.constants import COMMON_AA, SUPERTYPES
 from Validator.losses_and_metrics import weighted_bce, total_fdr, precision_m
-from Validator.fdr import calculate_qs
-from Validator.fdr import calculate_peptide_level_qs
+from Validator.fdr import calculate_qs, calculate_peptide_level_qs, calculate_roc
 import matplotlib.pyplot as plt
 from mhcflurry.encodable_sequences import EncodableSequences
 from Validator.models import get_model_without_peptide_encoding, get_bigger_model_with_peptide_encoding2, get_model_with_lstm_peptide_encoding
@@ -459,7 +458,7 @@ class Validator:
         self.X = deepcopy(X)
         self.y = deepcopy(y)
         #self.X = keras.utils.normalize(self.X, 0)
-        input_scalar.fit(self.X)
+        input_scalar = input_scalar.fit(self.X)  #THIS RETURNS THE FITTED SCALAR??????!?!?!?!?!
         self.X = input_scalar.transform(self.X)
 
         if encode_peptide_sequences:
@@ -524,9 +523,9 @@ class Validator:
         #X_train, y_train, X_train_peps = X_train[idx], y_train[idx], X_train_peps[idx]
 
         # normalize everything
-        input_scalar.fit(X_train)
+        input_scalar = input_scalar.fit(X_train)
         X_train = input_scalar.transform(X_train)  # keras.utils.normalize(X_train, 0)
-        input_scalar.fit(X_test)
+        #input_scalar = input_scalar.fit(X_test)
         X_test = input_scalar.transform(X_test)  # keras.utils.normalize(X_test, 0)
         if encode_peptide_sequences:
             # training peptides
@@ -612,12 +611,11 @@ class Validator:
 
         self.predictions = self.model.predict(self.X).flatten()
         print('Calculating PSM-level q-values')
-        self.qs = calculate_qs(self.predictions.astype(np.double), self.y.astype(np.int), higher_better=True)
+        self.qs = calculate_qs(self.predictions, self.y, higher_better=True)
         self.qs = np.asarray(self.qs, dtype=float)
         print('Calculating peptide-level q-values')
-        pep_qs, pep_xs, pep_ys, peps = calculate_peptide_level_qs(self.predictions.astype(np.double), self.y.astype(np.int), self.peptides)
-        qs = self.qs[self.y == 1]
-        self.roc = np.sum(qs <= qs[:, np.newaxis], axis=1)
+        pep_qs, pep_xs, pep_ys, peps = calculate_peptide_level_qs(self.predictions, self.y, self.peptides, higher_better=True)
+        self.roc = calculate_roc(self.qs, self.labels)
         psm_target_mask = (self.qs <= 0.01) & (self.y == 1)
         n_psm_targets = np.sum(psm_target_mask)
         n_unique_psms = len(np.unique(self.peptides[psm_target_mask]))
@@ -996,10 +994,9 @@ class Validator:
             plt.savefig(str(Path(outdir, 'all_data_distribution.svg')))
         plt.show()
 
-        qs = self.qs[self.y == 1]  # get q-values of targets
-        qs = qs[qs <= 0.05]
-        roc = np.sum(qs <= qs[:, np.newaxis], axis=1)
-        plt.plot(qs, roc, ls='none', marker='.', ms=1)
+        qs = self.roc[0][self.roc[0] <= 0.05]
+        response = self.roc[1][self.roc[0] <= 0.05]
+        plt.plot(qs, response, ls='none', marker='.', ms=1)
         plt.xlim((0, 0.05))
         plt.xlabel('FDR')
         plt.ylabel('Number of PSMs')
