@@ -28,6 +28,7 @@ from datetime import datetime
 from Validator.callbacks import SimpleEpochProgressMonitor
 from Validator.encoding import pad_and_encode_multiple_aa_seq
 from Validator.mhcnugget_helper import get_mhcnuggets_preds
+from Validator.libraries import load_library, filter_library
 import tempfile
 # This can be uncommented to prevent the GPU from getting used.
 import os
@@ -643,6 +644,21 @@ class Validator:
                 f.write(report)
         return report
 
+    def filter_library(self,
+                       filepath: Union[str, PathLike],
+                       lib_format: str = 'biognosys',
+                       fdr: float = 0.01,
+                       suffix: str = 'VFiltered',
+                       pep_list: List[str] = None):
+        if pep_list is None:
+            peps_to_use = self.peptides[self.qs <= fdr]
+        else:
+            peps_to_use = list(pep_list)
+        lib = load_library(filepath, lib_format)
+        filtered_lib = filter_library(lib, peptide_list=peps_to_use, lib_format=lib_format)
+        pout = Path(filepath).parent / (Path(filepath).stem + f'_{suffix}{Path(filepath).suffix}')
+        filtered_lib.to_csv(pout, sep='\t')
+
     def train_validation_model_with_kfold(self,
                                encode_peptide_sequences: bool = False,
                                epochs: int = 15,
@@ -937,12 +953,15 @@ class Validator:
         if outdir is not None:
             if not Path(outdir).exists():
                 Path(outdir).mkdir(parents=True)
+        min_val = np.min(self.fit_history.history['val_loss'])
+        n_epochs = len(self.fit_history.history['val_loss'])
         plt.plot(self.fit_history.history['loss'])
         plt.plot(self.fit_history.history['val_loss'])
+        plt.plot([min_val]*n_epochs, ls='--', c='gray')
         plt.title('model loss')
         plt.ylabel('loss')
         plt.xlabel('epoch')
-        plt.legend(['train', 'validate'], loc='upper left')
+        plt.legend(['train', 'validate', 'min validation loss'], loc='upper left')
         plt.tight_layout()
         if outdir is not None:
             plt.savefig(str(Path(outdir, 'loss_history.svg')))
