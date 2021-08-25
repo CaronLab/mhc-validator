@@ -27,12 +27,12 @@ from sklearn.preprocessing import MinMaxScaler
 from datetime import datetime
 from Validator.callbacks import SimpleEpochProgressMonitor
 from Validator.encoding import pad_and_encode_multiple_aa_seq
-from Validator.mhcnugget_helper import get_mhcnuggets_preds
+# from Validator.mhcnugget_helper import get_mhcnuggets_preds  # mhcnuggets seems to be broken with current versions of tensorflow
 from Validator.libraries import load_library, filter_library
 import tempfile
 # This can be uncommented to prevent the GPU from getting used.
-import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+#import os
+#os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 from scipy.stats import gmean as geom_mean
 
@@ -80,7 +80,18 @@ class Validator:
         self.model_dir = Path(model_dir)
         #self.graph = tf.Graph()
 
-    def set_mhc_params(self, alleles: List[str] = ('HLA-A0201', 'HLA-B0702', 'HLA-C0702'), mhc_class: str = 'I'):
+    def set_mhc_params(self,
+                       alleles: Union[str, List[str]] = ('HLA-A0201', 'HLA-B0702', 'HLA-C0702'),
+                       mhc_class: str = 'I') -> None:
+        """
+        Set the MHC-specific parameters.
+
+        :param alleles: The alleles to be used by MhcFlurry or NetMHCpan.
+        :param mhc_class: The MHC class of the peptides. Must be one of {'I', 'II'}
+        :return: None
+        """
+        if isinstance(alleles, str):
+            alleles = alleles
         assert mhc_class in ['I', 'II']
         assert len(alleles) >= 1
         self.alleles = [normalize_allele_name(a).replace('*', '').replace(':', '') for a in alleles]
@@ -93,13 +104,36 @@ class Validator:
             self.max_len = 30
 
     def load_data(self,
-                  filename: Union[str, PathLike],
+                  filepath: Union[str, PathLike],
                   filetype='auto',
                   decoy_tag='rev_',
                   protein_column: str = None,
                   tag_is_prefix: bool = True,
                   file_delimiter: str = '\t',
                   use_features: Union[List[str], None] = None):
+        """
+        Load the results of an upstream search or validation tool. PIN, pepXML, mzID, X! Tandem, Spectromine and
+        generic tabular formats are accepted. To load POUT files, use the separate 'load_pout_data' function. You can
+        load both PIN and POUT files from a single experiment using the separate 'load_percolator_data' function.
+        Generic tabular files must contain a column titled 'Peptide' or 'peptide' which contains the peptide sequences.
+
+        :param filepath: The path to the file you want to load. Can be absolute or relative.
+        :param filetype: The type of file. Must be one of {'auto', 'pin', 'pepxml', 'tabular', 'mzid', 'tandem',
+            'spectromine'}. If you choose 'auto', the file type will be inferred from the file extension.
+        :param decoy_tag: The decoy tag used in the upstream FASTA to differentiate decoy proteins from target proteins.
+        :param protein_column: The header of the column containing the protein IDs. Required for tabular data of an
+            unspecified format.
+        :param tag_is_prefix: Whether or not the decoy tag is a prefix. If False, it is assumed the tag is a suffix.
+        :param file_delimiter: The delimiter used if the file is tabular.
+        :param use_features: A list of column headers to be used as training features. Not required  If your tabular data
+            contains a column indicating the target/decoy label of each PSM, DO NOT INCLUDE THIS COLUMN! The label will
+            be determined from the protein IDs.
+        :return: None
+        """
+
+        if filetype not in ['auto', 'pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine']:
+            raise ValueError("The argument 'filetype' must be one of "
+                             "{'auto', 'pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine'}.")
 
         print(f'MHC class: {self.mhc_class if self.mhc_class else "not specified"}')
         print(f'Alleles: {self.alleles if self.alleles else "not specified"}')
@@ -107,7 +141,7 @@ class Validator:
         print(f'Maximum peptide length: {self.max_len}')
 
         print('Loading PSM file...')
-        self.raw_data = load_file(filename=filename, filetype=filetype, decoy_tag=decoy_tag,
+        self.raw_data = load_file(filename=filepath, filetype=filetype, decoy_tag=decoy_tag,
                                   protein_column=protein_column, file_sep=file_delimiter,
                                   tag_is_prefix=tag_is_prefix, min_len=self.min_len, max_len=self.max_len)
         self.labels = self.raw_data['Label'].to_numpy()
@@ -125,8 +159,8 @@ class Validator:
         print(f'Loaded {len(self.peptides)} PSMs')
 
         self.loaded_filetype = filetype
-        self.filename = Path(filename).name
-        self.filepath = Path(filename).expanduser().resolve()
+        self.filename = Path(filepath).name
+        self.filepath = Path(filepath).expanduser().resolve()
 
         print('Preparaing training features')
         self.feature_matrix = prepare_features(self.raw_data,
@@ -137,7 +171,15 @@ class Validator:
     def load_pout_data(self,
                        targets_pout: Union[str, PathLike],
                        decoys_pout: Union[str, PathLike],
-                       use_features: Union[List[str], None] = None):
+                       use_features: Union[List[str], None] = None) -> None:
+        """
+        Load POUT files generated by Percolator. You must have created both target and decoy POUT files from Percolator.
+
+        :param targets_pout: The path to the targets POUT file.
+        :param decoys_pout: The path to the decoys POUT file.
+        :param use_features: (Optional) A list of features (i.e. columns) to load.
+        :return: None
+        """
 
         print(f'MHC class: {self.mhc_class if self.mhc_class else "not specified"}')
         print(f'Alleles: {self.alleles if self.alleles else "not specified"}')
@@ -167,7 +209,19 @@ class Validator:
                              use_features: Union[List[str], None] = None,
                              decoy_tag='rev_',
                              tag_is_prefix: bool = True
-                             ):
+                             ) -> None:
+        """
+        Load PIN and POUT files from a single experiment.You must have created both target and decoy POUT files from
+        Percolator.
+
+        :param pin_file: Path to the PIN file.
+        :param target_pout_file: The path to the targets POUT file.
+        :param decoy_pout_file: The path to the decoys POUT file.
+        :param use_features: (Optional) A list of features (i.e. columns) to load.
+        :param decoy_tag: The decoy tag used to indicate decoys in the upstream FASTA file.
+        :param tag_is_prefix: Whether or not the decoy tag is a prefix. If False, it is assumed the tag is a suffix.
+        :return: None
+        """
         print(f'MHC class: {self.mhc_class if self.mhc_class else "not specified"}')
         print(f'Alleles: {self.alleles if self.alleles else "not specified"}')
         print(f'Minimum peptide length: {self.min_len}')
@@ -203,6 +257,12 @@ class Validator:
         self.feature_names = list(self.feature_matrix.columns)
 
     def prepare_data(self, use_feature: Union[List[str], None] = None):
+        """
+        Create training features from loaded data.
+
+        :param use_feature: (Optional) A list of features to use from the loaded data.
+        :return: None
+        """
         if self.raw_data is None:
             raise AttributeError("Data has not yet been loaded.")
         self.feature_matrix = prepare_features(self.raw_data,
@@ -210,6 +270,10 @@ class Validator:
                                                use_features=use_feature)
 
     def add_mhcflurry_predictions(self):
+        """
+        Run MhcFlurry and add presentation predictions to the training feature matrix.
+        :return: None
+        """
         if self.alleles is None or self.mhc_class is None:
             raise RuntimeError('You must first set the MHC parameters using Validator.set_mhc_params')
         if self.mhc_class == 'II':
@@ -229,6 +293,10 @@ class Validator:
         self.feature_matrix = add_mhcflurry_to_feature_matrix(self.feature_matrix, preds)
 
     def add_netmhcpan_predictions(self):
+        """
+        Run NetMHCpan and add presentation predictions to the training feature matrix.
+        :return: None
+        """
         if self.alleles is None or self.mhc_class is None:
             raise RuntimeError('You must first set the MHC parameters using Validator.set_mhc_params')
         if self.mhc_class == 'II':
@@ -246,7 +314,7 @@ class Validator:
         to_drop = [x for x in preds.columns if 'rank' in x.lower()]
         preds.drop(columns=to_drop, inplace=True)
         self.feature_matrix = add_netmhcpan_to_feature_matrix(self.feature_matrix, preds)
-
+    '''
     def add_mhcnuggets_predictions(self):
         if self.alleles is None or self.mhc_class is None:
             raise RuntimeError('You must first set the MHC parameters using Validator.set_mhc_params')
@@ -257,8 +325,14 @@ class Validator:
 
         preds = get_mhcnuggets_preds(self.mhc_class, alleles, self.peptides)
         self.feature_matrix = self.feature_matrix.join(preds)
+    '''
 
     def add_all_available_predictions(self, verbose_errors: bool = False):
+        """
+        Try to run both MhcFlurry and NetMHCpan and add their predictions to the training features.
+        :param verbose_errors:
+        :return:
+        """
         try:
             self.add_netmhcpan_predictions()
         except Exception as e:
@@ -272,13 +346,6 @@ class Validator:
             if verbose_errors:
                 print(e)
             print(f'Unable to run MhcFlurry.'
-                  f'{" See exception information above." if verbose_errors else ""}')
-        try:
-            self.add_mhcnuggets_predictions()
-        except Exception as e:
-            if verbose_errors:
-                print(e)
-            print(f'Unable to run MhcNuggets.'
                   f'{" See exception information above." if verbose_errors else ""}')
 
     def get_confident_indices(self, index_for_training, quantile: float = 0.1):
