@@ -386,7 +386,8 @@ def load_file(filename: Union[str, PathLike],
                              'filetype.')
     else:
         if filetype not in ['pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine']:
-            raise ValueError("filetype must be one of ['pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine']")
+            raise ValueError("filetype must be one of "
+                             "{'auto', 'pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine'}")
 
     if filetype == 'pin':
         df = load_pin_data(filename, decoy_tag=decoy_tag, protein_column=protein_column, tag_is_prefix=tag_is_prefix)
