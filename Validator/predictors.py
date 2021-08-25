@@ -488,6 +488,21 @@ class Validator:
         mask = np.sum(ranks, axis=1) >= n
         return mask
 
+    """
+    This can be added into the training function to save model progress
+    def get_model_name(k):
+            return 'model_' + str(k) + '.h5'
+            
+    # CREATE CALLBACKS
+    checkpoint = keras.callbacks.ModelCheckpoint(str(MODEL_DIR / get_model_name(fold_var)),
+                                                 monitor='val_loss', verbose=0,
+                                                 save_best_only=True, mode='min')
+
+    callbacks_list = [checkpoint, SimpleEpochProgressMonitor()]
+    # load best model weights and append to list
+    model.load_weights(str(MODEL_DIR / get_model_name(fold_var)))
+    """
+
     def train_validation_model(self,
                                encode_peptide_sequences: bool = False,
                                lstm_model: bool = False,
@@ -725,228 +740,6 @@ class Validator:
         filtered_lib = filter_library(lib, peptide_list=peps_to_use, lib_format=lib_format)
         pout = Path(filepath).parent / (Path(filepath).stem + f'_{suffix}{Path(filepath).suffix}')
         filtered_lib.to_csv(pout, sep='\t')
-
-    def train_validation_model_with_kfold(self,
-                               encode_peptide_sequences: bool = False,
-                               epochs: int = 15,
-                               batch_size: int = 128,
-                               loss_fn=tf.losses.BinaryCrossentropy(),  # =weighted_bce(10, 2, 0.5),
-                               holdout_split: float = 0.25,
-                               subset: np.array = None,
-                               visualize: bool = True,
-                               report_dir: Union[str, PathLike] = None,
-                               random_seed: int = None,
-                               decoy_rank_for_training: float = None,
-                                          k: int = 5):
-        MODEL_DIR = self.model_dir / str(datetime.now()).replace(' ', '_').replace(':', '-')
-        MODEL_DIR.mkdir(parents=True)
-
-        X = self.feature_matrix.to_numpy(dtype=np.float32)
-        y = np.array(self.labels, dtype=np.float32)
-        peptides = np.array(self.peptides)
-
-        assert X.shape[0] == y.shape[0]
-
-        if random_seed is None:
-            random_seed = self.random_seed
-
-        # save X and y before we do any shuffling. We will need this in the original order for predictions later
-        self.X = deepcopy(X)
-        self.y = deepcopy(y)
-        self.X = keras.utils.normalize(self.X, 0)
-
-        if encode_peptide_sequences:
-            # add encoded sequences to self.X
-            encoder = EncodableSequences(list(self.peptides))
-            encoded_peps = encoder.variable_length_to_fixed_length_vector_encoding('BLOSUM62')
-            encoded_peps = keras.utils.normalize(encoded_peps, 0)
-            self.X = [self.X, encoded_peps]
-        if subset is not None and decoy_rank_for_training is not None:
-            raise ValueError("'subset' and 'decoy_training_rank' cannot both be defined.")
-        if subset is not None:
-            X = X[subset]
-            y = y[subset]
-            peptides = peptides[subset]
-        if decoy_rank_for_training is not None:
-            mask = self.get_rank_subset_mask(self.feature_matrix.to_numpy(np.float32), np.array(self.labels),
-                                             decoy_rank_for_training)
-            X = X[mask]
-            y = y[mask]
-            peptides = peptides[mask]
-
-        rs = RandomState(seed=random_seed)
-
-        # first shuffle everything
-        random_index = rs.permutation(X.shape[0])
-        X = X[random_index]
-        y = y[random_index]
-        shuffled_peps = peptides[random_index]
-
-        # get training and testing sets
-        test_size = int(X.shape[0] * holdout_split)
-        X_train, X_test = X[test_size:, :], X[:test_size, :]
-        y_train, y_test = y[test_size:], y[:test_size]
-        X_train_peps, X_test_peps = shuffled_peps[test_size:], shuffled_peps[:test_size]
-
-        assert X_train.shape[0] == y_train.shape[0] == X_train_peps.shape[0]
-        assert X_test.shape[0] == y_test.shape[0]
-        assert X_train.shape[1] == X_test.shape[1]
-
-        # normalize everything
-        X_train = keras.utils.normalize(X_train, 0)
-        X_test = keras.utils.normalize(X_test, 0)
-
-        # encode peptides if needed
-        if encode_peptide_sequences:
-            # training peptides
-            encoder = EncodableSequences(list(X_train_peps))
-            encoded_peps = encoder.variable_length_to_fixed_length_vector_encoding('BLOSUM62')
-            X_train_peps = keras.utils.normalize(encoded_peps, 0)
-            training_set = [X_train, X_train_peps]
-
-            # testing peptides
-            encoder = EncodableSequences(list(X_test_peps))
-            encoded_peps = encoder.variable_length_to_fixed_length_vector_encoding('BLOSUM62')
-            X_test_peps = keras.utils.normalize(encoded_peps, 0)
-            testing_set = [X_test, X_test_peps]
-        else:
-            training_set = X_train
-            testing_set = X_test
-        self.X_test = testing_set
-        self.y_test = y_test
-
-        # shuffle the X_train and y_train one last time
-        assert y_train.shape[0] == X_train.shape[0]
-        random_index = rs.permutation(y_train.shape[0])
-        if encode_peptide_sequences:
-            training_set = [training_set[0][random_index], training_set[1][random_index]]
-        else:
-            training_set = training_set[random_index]
-        y_train = y_train[random_index]
-        self.X_train = training_set
-        self.y_train = y_train
-
-        # set up the kfolds splits
-        kfold = StratifiedKFold(n_splits=k, shuffle=True, random_state=rs)
-
-        tf.random.set_seed(random_seed)
-
-        def get_model_name(k):
-            return 'model_' + str(k) + '.h5'
-
-        fold_var = 1
-        if encode_peptide_sequences:
-            predictions_from_all_models = np.empty((self.X[0].shape[0], k))
-        else:
-            predictions_from_all_models = np.empty((self.X.shape[0], k))
-        reports = []
-        # iterate through the splits
-        for train_indices, val_indices in kfold.split(np.zeros(self.y_train.shape[0]), self.y_train):
-            print(f'############### Fold {fold_var}/{k} ###############')
-            if not encode_peptide_sequences:
-                X_train, X_val = self.X_train[train_indices], self.X_train[val_indices]
-                X_train = keras.utils.normalize(X_train, 0)
-                X_val = keras.utils.normalize(X_val, 0)
-            else:
-                X_train = [self.X_train[0][train_indices], self.X_train[1][train_indices]]
-                X_val = [self.X_train[0][val_indices], self.X_train[1][val_indices]]
-                X_train[0] = keras.utils.normalize(X_train[0], 0)
-                X_train[1] = keras.utils.normalize(X_train[1], 0)
-                X_val[0] = keras.utils.normalize(X_val[0], 0)
-                X_val[1] = keras.utils.normalize(X_val[1], 0)
-            y_train, y_val = self.y_train[train_indices], self.y_train[val_indices]
-
-            # CREATE CALLBACKS
-            checkpoint = keras.callbacks.ModelCheckpoint(str(MODEL_DIR / get_model_name(fold_var)),
-                                                         monitor='val_loss', verbose=0,
-                                                         save_best_only=True, mode='min')
-
-            callbacks_list = [checkpoint, SimpleEpochProgressMonitor()]
-
-            if encode_peptide_sequences:
-                get_model = get_bigger_model_with_peptide_encoding2
-            else:
-                get_model = get_model_without_peptide_encoding
-
-            model = get_model(self.feature_matrix.shape[1])
-            model.compile(loss=loss_fn,
-                          optimizer='adam',
-                          metrics=['accuracy'])
-
-            fit_history = model.fit(X_train,
-                                    y_train,
-                                    sample_weight=self.training_weights,
-                                    epochs=epochs,
-                                    batch_size=batch_size,
-                                    verbose=0,
-                                    callbacks=callbacks_list,
-                                    validation_data=(X_val, y_val))
-
-            # load best model weights and append to list
-            model.load_weights(str(MODEL_DIR / get_model_name(fold_var)))
-
-            predictions = model.predict(self.X).flatten()
-            predictions_from_all_models[:, fold_var-1] = predictions
-            self.predictions = deepcopy(predictions)
-            self.qs = calculate_qs(self.predictions, self.y, higher_better=True)
-            qs = self.qs[self.y == 1]
-            self.roc = np.sum(qs <= qs[:, np.newaxis], axis=1)
-            target_mask = (self.qs <= 0.01) & (self.y == 1)
-            n_targets = np.sum(target_mask)
-            n_unique = len(np.unique(self.peptides[target_mask]))
-            evaluate = model.evaluate(self.X_test, self.y_test, batch_size=batch_size, verbose=0)
-            report = '----- PSMS AND PEPTIDES -----\n'\
-                     f'Target PSMs at 1% FDR: {n_targets}\n'\
-                     f'Unique peptides at 1% FDR: {n_unique}\n' \
-                     f'\n' \
-                     f'----- MODEL TRAINING, VALIDATION, TESTING -----\n'\
-                     f'Training loss: {round(fit_history.history["loss"][-1], 3)} - '\
-                     f'Validation loss: {round(fit_history.history["val_loss"][-1], 3)} - '\
-                     f'Testing loss: {round(evaluate[0], 3)}\n'\
-                     f'Training accuracy: {round(fit_history.history["accuracy"][-1], 3)} - '\
-                     f'Validation accuracy: {round(fit_history.history["val_accuracy"][-1], 3)} - '\
-                     f'Testing accuracy: {round(evaluate[1], 3)}\n\n'
-            print(report)
-            reports.append(report)
-            fold_var += 1
-            K.clear_session()
-
-        # now average the predictions from all models and calculate other things
-        self.predictions = np.mean(predictions_from_all_models, axis=1)
-
-        self.qs = calculate_qs(self.predictions, self.y, higher_better=True)
-        qs = self.qs[self.y == 1]
-        self.roc = np.sum(qs <= qs[:, np.newaxis], axis=1)
-        target_mask = (self.qs <= 0.01) & (self.y == 1)
-        n_targets = np.sum(target_mask)
-        n_unique = len(np.unique(self.peptides[target_mask]))
-
-        report = '############### FINAL REPORT ###############\n' \
-                 f'Target PSMs at 1% FDR: {n_targets}\n' \
-                 f'Unique peptides at 1% FDR: {n_unique}\n' \
-                 f'############################################'
-
-        #for rep in reports:
-        #    print(rep)
-        #    print()
-        print(report)
-
-        self.raw_data['v_prob'] = list(self.predictions)
-        self.raw_data['q_value'] = list(self.qs)
-
-        predictions = self.predictions
-        plt.hist(x=np.array(predictions[self.y == 1]).flatten(), label='Target', bins=30, alpha=0.6)
-        plt.hist(x=np.array(predictions[self.y == 0]).flatten(), label='Decoy', bins=30, alpha=0.6)
-        if isinstance(self.filename, (list, tuple)):
-            name = Path(self.filename[0]).stem
-        else:
-            name = Path(self.filename).stem
-        plt.title('Validator scores\n'
-                  f'{name}')
-        plt.legend()
-        plt.show()
-
-        self.plot_roc(0.05)
 
     def iterate_training(self,
                          iterations: int = 2,
