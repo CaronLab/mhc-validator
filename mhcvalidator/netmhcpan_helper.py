@@ -11,6 +11,7 @@ from uuid import uuid4
 from mhcnames import normalize_allele_name, compact_allele_name
 import pandas as pd
 import tempfile
+from tqdm.contrib.concurrent import process_map
 
 common_aa = "ARNDCQEGHILKMFPSTWYV"
 TMP_DIR = str(Path(tempfile.gettempdir(), 'pynetmhcpan').expanduser())
@@ -64,9 +65,9 @@ def run(job: Job):
 
 
 def _run_multiple_processes(jobs: List[Job], n_processes: int):
-    pool = Pool(n_processes)
-    returns = pool.map(run, jobs)
-    pool.close()
+    #pool = Pool(n_processes)
+    returns = process_map(run, jobs, max_workers=n_processes)
+    #pool.close()
     return returns
 
 
@@ -202,10 +203,11 @@ class NetMHCpanHelper:
         random.shuffle(peptides)  # we need to shuffle them so we don't end up with files filled with peptide lengths that take a LONG time to compute (this actually is a very significant speed up)
 
         if len(peptides) > 100:
-            chunks = chunk_list(peptides, int(len(peptides)/self.n_threads))
+            chunks = chunk_list(peptides, 100)
         else:
             chunks = [peptides]
         job_number = 1
+        print(f'Peptide list broken into {len(chunks)} chunks.')
 
         for chunk in chunks:
             if len(chunk) < 1:

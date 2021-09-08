@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from Validator.constants import EPSILON
+from mhcvalidator.constants import EPSILON
 
 
 def add_mhcflurry_to_feature_matrix(feature_matrix: pd.DataFrame, mhcflurry_predictions: pd.DataFrame) -> pd.DataFrame:
@@ -37,7 +37,7 @@ def add_netmhcpan_to_feature_matrix(feature_matrix: pd.DataFrame, netmhcpan_pred
     alleles = list(netmhcpan_predictions.loc[:, 'Allele'].unique())
     for allele in alleles:
         df = netmhcpan_predictions.loc[netmhcpan_predictions['Allele'] == allele, :]
-        for pred in ['EL_score', 'EL_Rank', 'Aff_Score', 'Aff_Rank', 'Aff_nM']:
+        for pred in ['EL_score', 'Aff_Score', 'Aff_nM']:
             predictions[f'{allele}_NetMHCpan_{pred}'] = df[pred].clip(lower=EPSILON).to_numpy()
         predictions[f'{allele}_logNetMHCpan_Aff_nM'] = np.log(predictions[f'{allele}_NetMHCpan_Aff_nM'].to_numpy())
         predictions.drop(columns=[f'{allele}_NetMHCpan_Aff_nM'], inplace=True)

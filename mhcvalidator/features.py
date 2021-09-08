@@ -1,8 +1,8 @@
 import pandas as pd
 import numpy as np
 from typing import List, Union
-from Validator.peptides import clean_peptide_sequences
-from Validator.constants import PROTON_MASS
+from mhcvalidator.peptides import clean_peptide_sequences
+from mhcvalidator.constants import PROTON_MASS
 from collections import Counter
 
 

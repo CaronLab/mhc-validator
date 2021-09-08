@@ -8,9 +8,9 @@ I will start by simply encoding the amino acids as integers
 import numpy as np
 from tensorflow import keras
 from tensorflow.keras import layers
-from Validator.predictors import Validator
+from mhcvalidator.predictors import MhcValidator
 import matplotlib.pyplot as plt
-from Validator.encoding import pad_and_encode_multiple_aa_seq
+from mhcvalidator.encoding import pad_and_encode_multiple_aa_seq
 
 max_features = 20  # There are 20 common amino acids we will deal with
 maxlen = 15  # Our max peptide length is 15. For class II it is 30, but we will just start with 15 for now.
@@ -18,7 +18,7 @@ maxlen = 15  # Our max peptide length is 15. For class II it is 30, but we will 
 COMMON_AA = "ARNDCQEGHILKMFPSTWYV"
 COMMON_AA_LIST = list(COMMON_AA)
 
-v = Validator()
+v = MhcValidator()
 v.set_mhc_params(['A0201', 'A0217', 'B4002', 'B4101', 'C0202', 'C1701'], 'I')
 v.load_data('/Data/Data/SupremaReplicates/JY_Human/20211512_analysis/JY_301120_S3.pin',
             filetype='pin')

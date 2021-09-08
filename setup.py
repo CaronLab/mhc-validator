@@ -1,9 +1,9 @@
 from setuptools import setup
 
 setup(
-    name='Validator',
+    name='mhcvalidator',
     version='',
-    packages=['Validator'],
+    packages=['mhcvalidator'],
     url='',
     license='',
     author='Kevin Kovalchik',

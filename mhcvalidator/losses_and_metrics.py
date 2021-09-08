@@ -1,6 +1,7 @@
 import tensorflow as tf
 import tensorflow.keras as keras
 from tensorflow.keras import backend as K
+import numpy as np
 
 
 def Chi2Loss(y_true, y_pred):
