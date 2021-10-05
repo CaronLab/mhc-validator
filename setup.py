@@ -8,5 +8,7 @@ setup(
     license='',
     author='Kevin Kovalchik',
     author_email='',
-    description=''
+    description='',
+    install_requires=['mhcflurry', 'mhcnames', 'tensorflow', 'scikit-learn', 'pandas', 'numpy', 'tqdm', 'pyteomics',
+                      'matplotlib']
 )

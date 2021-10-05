@@ -203,7 +203,7 @@ class NetMHCpanHelper:
         random.shuffle(peptides)  # we need to shuffle them so we don't end up with files filled with peptide lengths that take a LONG time to compute (this actually is a very significant speed up)
 
         if len(peptides) > 100:
-            chunks = chunk_list(peptides, 100)
+            chunks = list(chunk_list(peptides, 100))
         else:
             chunks = [peptides]
         job_number = 1

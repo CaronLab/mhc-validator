@@ -2,6 +2,7 @@ import tensorflow as tf
 import tensorflow.keras as keras
 from tensorflow.keras import backend as K
 import numpy as np
+from mhcvalidator.fdr import calculate_qs
 
 
 def Chi2Loss(y_true, y_pred):
@@ -51,3 +52,12 @@ def f1_m(y_true, y_pred):
     precision = precision_m(y_true, y_pred)
     recall = recall_m(y_true, y_pred)
     return 2 * ((precision * recall) / (precision + recall + K.epsilon()))
+
+
+def n_psms_at_1percent_fdr(y_true, y_pred):
+    qs = calculate_qs(y_pred, y_true, higher_better=True)
+    n_decoys = np.sum((qs <= 0.01) & (y_true == 0))
+    n_targets = np.sum((qs <= 0.01) & (y_true == 1))
+
+    return n_decoys/n_targets
+
