@@ -39,10 +39,11 @@ def calculate_qs(metrics, labels, higher_better: bool = True):
             N_targets -= target_counts[sorted_metrics[i]]
             N_decoys -= decoy_counts[sorted_metrics[i]]
 
-    if not higher_better:
-        return np.flip(qs)
-    else:
-        return qs
+    #if not higher_better:
+    #    return np.flip(qs)
+    #else:
+    #    return qs
+    return qs
 
 
 def calculate_roc(qs, labels):
