@@ -67,12 +67,12 @@ def calculate_peptide_level_qs(metrics, labels, peptides, higher_better = True):
     n_peps = len(np.unique(peptides))
     best_x = np.empty(n_peps, dtype=np.double)
     best_y = np.empty(n_peps, dtype=np.intc)
-    best_peps = np.empty(n_peps, dtype=str)
+    best_peps = np.empty(n_peps, dtype='U15')
 
     ordered_idx = np.argsort(peptides)
     x = np.asarray([metrics[i] for i in ordered_idx], dtype=np.double)
     y = np.asarray([labels[i] for i in ordered_idx], dtype=np.int)
-    peps = np.asarray([peptides[i] for i in ordered_idx], dtype=str)
+    peps = np.asarray([peptides[i] for i in ordered_idx], dtype='U20')
 
     current_peptide = peps[0]
     current_metric = x[0]
@@ -81,7 +81,7 @@ def calculate_peptide_level_qs(metrics, labels, peptides, higher_better = True):
 
     assert int(max_i) == len(x) == len(y)
 
-    for i in range(1, max_i):
+    for i in range(1, max_i): # this fails to set things for the last peptide if it is the same as the previous
         if peps[i] == current_peptide:
             if higher_better:
                 if x[i] > current_metric:
