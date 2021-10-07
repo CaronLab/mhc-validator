@@ -1,4 +1,4 @@
-mhcflurry~=2.0.2
+mhcflurry>=2.0.2
 tensorflow
 numpy
 pandas
