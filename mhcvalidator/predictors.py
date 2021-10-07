@@ -200,7 +200,7 @@ class MhcValidator:
 
         print('Loading PSM file')
         self.raw_data = load_pout_data(targets_pout, decoys_pout, self.min_len, self.max_len)
-        self.labels = self.raw_data['Label']
+        self.labels = self.raw_data['Label'].values
         self.peptides = list(self.raw_data['peptide'])
         self.peptides = np.array(clean_peptide_sequences(self.peptides))
         #self.raw_data.drop(columns=['Label'], inplace=True)
@@ -725,8 +725,10 @@ class MhcValidator:
             print(report)
         self.raw_data['v_prob'] = list(self.predictions)
         self.raw_data['q_value'] = list(self.qs)
-        if visualize:
+        if visualize and report_dir is not None:
             self.visualize_training(outdir=report_dir)
+        elif not visualize and report_dir is not None:
+            self.visualize_training(outdir=report_dir, save_only=True)
         if report_dir is not None:
             with open(Path(report_dir, 'training_report.txt'), 'w') as f:
                 f.write(report)
@@ -1055,7 +1057,7 @@ class MhcValidator:
                                     #    self.raw_data.to_csv(str(Path(output_dir) / f'{self.filename}_MhcV.txt'),
                                     #                         index=False)
 
-    def visualize_training(self, outdir: Union[str, PathLike] = None, log_yscale: bool = False):
+    def visualize_training(self, outdir: Union[str, PathLike] = None, log_yscale: bool = False, save_only: bool = False):
         if self.fit_history is None or self.X_test is None or self.y_test is None:
             raise AttributeError("Model has not yet been trained. Use run to train.")
         if outdir is not None:
@@ -1106,7 +1108,9 @@ class MhcValidator:
         plt.tight_layout()
         if outdir is not None:
             plt.savefig(str(Path(outdir, 'training_history.svg')))
-        plt.show()
+        if not save_only:
+            plt.show()
+        plt.clf()
 
         train_predictions = self.model.predict(self.X_train)
         _, bins, _ = plt.hist(x=np.array(train_predictions[self.y_train == 0]).flatten(),
@@ -1119,7 +1123,9 @@ class MhcValidator:
         plt.legend()
         if outdir is not None:
             plt.savefig(str(Path(outdir, 'training_distribution.svg')))
-        plt.show()
+        if not save_only:
+            plt.show()
+        plt.clf()
 
         test_predictions = self.model.predict(self.X_test)
         _, bins, _ = plt.hist(x=np.array(test_predictions[self.y_test == 0]).flatten(),
@@ -1132,7 +1138,9 @@ class MhcValidator:
         plt.legend()
         if outdir is not None:
             plt.savefig(str(Path(outdir, 'testing_distribution.svg')))
-        plt.show()
+        if not save_only:
+            plt.show()
+        plt.clf()
 
         predictions = self.predictions
         _, bins, _ = plt.hist(x=np.array(predictions[self.y == 0]).flatten(), label='Decoy', bins=30, alpha=0.6)
@@ -1144,7 +1152,9 @@ class MhcValidator:
         plt.legend()
         if outdir is not None:
             plt.savefig(str(Path(outdir, 'all_data_distribution.svg')))
-        plt.show()
+        if not save_only:
+            plt.show()
+        plt.clf()
 
         qs = self.roc[0][self.roc[0] <= 0.05]
         response = self.roc[1][self.roc[0] <= 0.05]
@@ -1155,7 +1165,9 @@ class MhcValidator:
         plt.title('ROC')
         if outdir is not None:
             plt.savefig(str(Path(outdir, 'ROC.svg')))
-        plt.show()
+        if not save_only:
+            plt.show()
+        plt.clf()
 
     def write_table(self, filename: Union[str, PathLike] = None):
         if self.predictions is None or self.model is None:
