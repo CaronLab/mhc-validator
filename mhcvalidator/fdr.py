@@ -104,6 +104,12 @@ def calculate_peptide_level_qs(metrics, labels, peptides, higher_better = True):
             current_peptide = peps[i]
             current_metric = x[i]
 
+            if i == max_i - 1:  # ensure the last entry gets set correctly
+                best_x[pep_idx] = current_metric
+                pre_i = i - 1
+                best_y[pep_idx] = y[pre_i]
+                best_peps[pep_idx] = current_peptide
+
     qs = calculate_qs(metrics=best_x, labels=best_y, higher_better=higher_better)
 
     return np.asarray(qs), np.asarray(best_x), np.asarray(best_y), np.asarray(best_peps)
