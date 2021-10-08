@@ -81,7 +81,7 @@ def calculate_peptide_level_qs(metrics, labels, peptides, higher_better = True):
 
     assert int(max_i) == len(x) == len(y)
 
-    for i in range(1, max_i): # this fails to set things for the last peptide if it is the same as the previous
+    for i in range(1, max_i):
         if peps[i] == current_peptide:
             if higher_better:
                 if x[i] > current_metric:
@@ -89,6 +89,11 @@ def calculate_peptide_level_qs(metrics, labels, peptides, higher_better = True):
             else:
                 if x[i] < current_metric:
                     current_metric = x[i]
+            if i == max_i - 1:  # ensure the last entry gets set correctly
+                best_x[pep_idx] = current_metric
+                pre_i = i - 1
+                best_y[pep_idx] = y[pre_i]
+                best_peps[pep_idx] = current_peptide
         else:
             best_x[pep_idx] = current_metric
             pre_i = i - 1
