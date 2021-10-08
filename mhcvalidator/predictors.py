@@ -304,7 +304,7 @@ class MhcValidator:
                                       )
         self.feature_matrix = add_mhcflurry_to_feature_matrix(self.feature_matrix, preds)
 
-    def add_netmhcpan_predictions(self):
+    def add_netmhcpan_predictions(self, n_processes: int = 0):
         """
         Run NetMHCpan and add presentation predictions to the training feature matrix.
         :return: None
@@ -321,7 +321,8 @@ class MhcValidator:
         print(f'Running NetMHC{"II" if self.mhc_class=="II" else ""}pan')
         netmhcpan = NetMHCpanHelper(peptides=self.peptides,
                                     alleles=alleles,
-                                    mhc_class=self.mhc_class)
+                                    mhc_class=self.mhc_class,
+                                    n_threads=n_processes)
         preds = netmhcpan.predict_df()
         to_drop = [x for x in preds.columns if 'rank' in x.lower()]
         preds.drop(columns=to_drop, inplace=True)
