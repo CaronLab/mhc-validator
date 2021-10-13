@@ -286,8 +286,10 @@ def load_pepxml_data(filepath: Union[str, Path],
     after = len(df)
     if after != before:
         print(f"INFO: {before-after} spectra had no identifications and were dropped.")
+    df[prot_column] = df[prot_column].apply(lambda x: '@@'.join(x))
     add_label_feature_from_protein_id(df=df,
-                                      func=extract_label_func,
+                                      func=extract_label_func if extract_label_func is not None
+                                      else lambda x: 0 if x.startswith(decoy_prefix) else 1,
                                       prot_column=prot_column,
                                       decoy_prefix=decoy_prefix)
     return df

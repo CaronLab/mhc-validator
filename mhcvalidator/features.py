@@ -109,7 +109,7 @@ def prepare_pepxml_features(data,
                           'peptide_next_aa', 'num_tol_term', 'modifications', 'hit_rank', 'peptide',
                           'num_tot_proteins', 'num_matched_ions', 'tot_num_ions', 'is_rejected',
                           'num_missed_cleavages', 'calc_neutral_pep_mass', 'massdiff',
-                          'num_matched_peptides', 'modified_peptide']
+                          'num_matched_peptides', 'modified_peptide', 'nmc', 'ntt', 'peptideprophet_ntt_prob']
         DO_NOT_USE = ['Label', 'q-value', 'q_value']
         df_columns = list(data.columns)
         search_scores = list(set(df_columns) - set(common_columns + DO_NOT_USE))
@@ -117,7 +117,11 @@ def prepare_pepxml_features(data,
             # this catches different search scores, also peptideprophet and iprophet values
             if score == 'expect':
                 features['log10_evalue'] = np.log10(data['expect'].astype(np.float32))
-            features[score] = data[score].astype(np.float32)
+            try:
+                features[score] = data[score].astype(np.float32)
+            except ValueError as e:
+                print(score)
+                raise e
 
         if include_cleavage_metrics:
             features['num_tol_term'] = data['num_tol_term'].astype(np.float32)

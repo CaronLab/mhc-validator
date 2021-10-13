@@ -557,16 +557,22 @@ class MhcValidator:
         y = y[random_index]
         shuffled_peps = peptides[random_index]
 
-        # to ensure we don't have common peptide sequences between train and test
-        #train_idx, test_idx = self.get_train_test_indices(y, shuffled_peps, holdout_split, rs)
-        #X_train, X_test = X[train_idx], X[test_idx]
-        #y_train, y_test = y[train_idx], y[test_idx]
-        #X_train_peps, X_test_peps = shuffled_peps[train_idx], shuffled_peps[test_idx]
-
         test_size = int(X.shape[0] * holdout_split)
         X_train, X_test = X[test_size:, :], X[:test_size, :]
         y_train, y_test = y[test_size:], self.y[random_index][:test_size]
         X_train_peps, X_test_peps = shuffled_peps[test_size:], shuffled_peps[:test_size]
+
+        # ensure we don't have common peptide sequences between train and test sets
+        def swap(A, B, i, j):
+            A[i], B[j] = B[j], A[i].copy()
+            return A, B
+        while len(set(X_train_peps) - set(X_test_peps)) > 0:
+            for i in range(len(X_train_peps)):
+                if X_train_peps[i] in X_test_peps:
+                    j = rs.choice(range(len(X_test_peps)))
+                    X_train, X_test = swap(X_train, X_test, i, j)
+                    y_train, y_test = swap(y_train, y_test, i, j)
+                    X_train_peps, X_test_peps = swap(X_train_peps, X_test_peps, i, j)
 
         assert X_train.shape[0] == y_train.shape[0] == X_train_peps.shape[0]
         assert X_test.shape[0] == y_test.shape[0]
