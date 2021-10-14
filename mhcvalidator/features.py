@@ -4,6 +4,7 @@ from typing import List, Union
 from mhcvalidator.peptides import clean_peptide_sequences
 from mhcvalidator.constants import PROTON_MASS
 from collections import Counter
+from tqdm import tqdm
 
 
 pepxml_numerical_features = ['num_tot_proteins',
@@ -24,6 +25,59 @@ Index(['uncalibrated_precursor_neutral_mass', 'assumed_charge', 'native_id',
        'modified_peptide', 'Label'],
       dtype='object')
 """
+
+
+def eliminate_common_peptides_between_sets(X_1: np.ndarray,
+                                           X_2: np.ndarray,
+                                           y_1: np.ndarray,
+                                           y_2: np.ndarray,
+                                           peps_1: np.ndarray,
+                                           peps_2: np.ndarray,
+                                           encoded_peps_1: np.ndarray,
+                                           encoded_peps_2: np.ndarray,
+                                           random_state: np.random.RandomState):
+
+    """
+    Make sure there aren't common peptide sequences between sets used for training, validation, testing. For normal PSM
+    validation this isn't an issue, but we are making use of the sequence itself, so we don't want the algorithm memorizing
+    sequences to get a better loss.
+    :param X_1:
+    :param X_2:
+    :param y_1:
+    :param y_2:
+    :param peps_1:
+    :param peps_2:
+    :return:
+    """
+    if random_state is None:
+        random_state = np.random.RandomState()
+    def swap(A, B, mask_i, mask_j):
+        assert len(mask_i) == len(mask_j)
+        A[mask_i], B[mask_j] = B[mask_j], A[mask_i].copy()
+        return [A, B]
+
+    to_fix = list(set(peps_2) & set(peps_1))
+    X = [X_1, X_2]
+    y = [y_1, y_2]
+    peps = [peps_1, peps_2]
+    encoded_peps = [encoded_peps_1, encoded_peps_2]
+    counter = 0
+    for peptide in tqdm(to_fix, desc='Eliminating common peptides between sets'):
+        i = counter % 2
+        j = 1 if i == 0 else 0
+        counter += 1
+        mask_i = np.argwhere(peps[i] == peptide).flatten()
+        target_decoy = y[i][mask_i][0]  # is it a target or a decoy?
+        others = np.argwhere(y[j] == target_decoy).flatten()  # indices of other array that are targets/decoys as appropriate
+        p = set(peps[i])
+        others = [x for x in others if peps[j][x] not in p]  # remove those which are present in both arrays
+        mask_j = random_state.choice(others, len(mask_i), False)  # random elements from "others" array
+        X[i], X[j] = swap(X[i], X[j], mask_i, mask_j)
+        y[i], y[j] = swap(y[i], y[j], mask_i, mask_j)
+        peps[i], peps[j] = swap(peps[i], peps[j], mask_i, mask_j)
+        encoded_peps[i], encoded_peps[j] = swap(encoded_peps[i], encoded_peps[j], mask_i, mask_j)
+
+    return X_1, X_2, y_1, y_2, peps_1, peps_2, encoded_peps_1, encoded_peps_2
 
 
 def prepare_features(data, filetype, use_features: Union[List[str], None]):

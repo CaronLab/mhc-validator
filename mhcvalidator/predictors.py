@@ -8,7 +8,7 @@ from typing import Union, List
 from os import PathLike
 from pathlib import Path
 from mhcvalidator.data_loaders import load_file, load_pout_data
-from mhcvalidator.features import prepare_features
+from mhcvalidator.features import prepare_features, eliminate_common_peptides_between_sets
 from mhcvalidator.predictions_parsers import add_mhcflurry_to_feature_matrix, add_netmhcpan_to_feature_matrix
 from mhcvalidator.netmhcpan_helper import NetMHCpanHelper, format_class_II_allele
 from mhcvalidator.constants import COMMON_AA, SUPERTYPES
@@ -54,7 +54,6 @@ class MhcValidator:
         self.peptides: Union[List[str], None] = None
         self.previous_aa: Union[List[str], None] = None
         self.next_aa: Union[List[str], None] = None
-        self.predicted_probabilities: Union[List[float], None] = None
         self.mzml = None
         self.loaded_filetype: Union[str, None] = None
         self.random_seed = random_seed
@@ -65,9 +64,20 @@ class MhcValidator:
         self.y = None
         self.X_train = None
         self.y_train = None
+        self.X_val = None
+        self.X_train_peps = None
+        self.X_test_peps = None
+        self.X_val_peps = None
+        self.X_train_encoded_peps = None
+        self.X_test_encoded_peps = None
+        self.X_val_encoded_peps = None
+        self.y_val = None
         self.training_weights = None
         self.search_score_names: List[str] = []
         self.predictions = None
+        self.training_predictions = None
+        self.testing_predictions = None
+        self.validation_predictions = None
         self.qs = None
         self.roc = None
         self.prior_qs = None
@@ -268,18 +278,126 @@ class MhcValidator:
                                                use_features=use_features)
         self.feature_names = list(self.feature_matrix.columns)
 
-    def prepare_data(self, use_feature: Union[List[str], None] = None):
+    def prepare_data(self, validation_split: float = 0.33, holdout_split: float = 0.33, random_seed: int = None):
         """
-        Create training features from loaded data.
-
-        :param use_feature: (Optional) A list of features to use from the loaded data.
-        :return: None
+        Split examples into training, validation, and testing sets. Ensure there are no common peptides sequences
+        between the sets. Encode peptide features. Note that the training set is implicitly what does not
+        go into the validation and testing sets. Be sure to leave a reasonable amount of data for it.
+        :param validation_split: float between 0 and 1. Portion of the dataset to go into the validation set.
+        :param holdout_split: float between 0 and 1. Portion of the dataset to go into the testing set.
+        :param random_seed:
+        :return:
         """
         if self.raw_data is None:
             raise AttributeError("Data has not yet been loaded.")
-        self.feature_matrix = prepare_features(self.raw_data,
-                                               filetype=self.loaded_filetype,
-                                               use_features=use_feature)
+
+        X = self.feature_matrix.to_numpy(dtype=np.float32)
+        y = np.array(self.labels, dtype=np.float32)
+        peptides = np.array(self.peptides, dtype='U100')
+
+        assert X.shape[0] == y.shape[0]
+
+        if random_seed is None:
+            random_seed = self.random_seed
+        tf.random.set_seed(random_seed)
+        rs = RandomState(seed=random_seed)
+        np.random.seed(random_seed)
+        input_scalar = MinMaxScaler()
+
+        # save X and y before we do any shuffling. We will need this in the original order for predictions later
+        self.X = deepcopy(X)
+        input_scalar = input_scalar.fit(self.X)
+        self.X = input_scalar.transform(self.X)
+        self.y = deepcopy(y)
+
+        # encode all peptide sequences
+        encoder = EncodableSequences(list(self.peptides))
+        padding = 'pad_middle' if self.mhc_class == 'I' else 'left_pad_right_pad'
+        encoded_peps = encoder.variable_length_to_fixed_length_vector_encoding('BLOSUM62',
+                                                                               max_length=self.max_len,
+                                                                               alignment_method=padding)
+        encoded_peps = keras.utils.normalize(encoded_peps, 0)
+        self.X_encoded_peps = encoded_peps
+
+        # first get training and testing sets
+        random_index = rs.permutation(X.shape[0])
+        X = X[random_index]
+        y = y[random_index]
+        shuffled_peps = peptides[random_index]
+        shuffled_encoded_peps = self.X_encoded_peps[random_index]
+
+        test_size = int(X.shape[0] * holdout_split)
+        validation_size = int(X.shape[0] * validation_split)
+
+        # first separate out the training set
+        X_the_rest, X_train = X[:test_size + validation_size:, :], X[test_size + validation_size:, :]
+        y_the_rest, y_train = y[:test_size + validation_size], y[test_size + validation_size:]
+        X_the_rest_peps, X_train_peps = shuffled_peps[:test_size + validation_size], \
+                                        shuffled_peps[test_size + validation_size:]
+        X_the_rest_encoded_peps, X_train_encoded_peps = shuffled_encoded_peps[:test_size + validation_size, :], \
+                                                        shuffled_encoded_peps[test_size + validation_size:, :]
+
+        # resolve common peptide sequences
+        X_the_rest, X_train, y_the_rest, y_train, X_the_rest_peps, X_train_peps, X_the_rest_encoded_peps, X_train_encoded_peps = \
+            eliminate_common_peptides_between_sets(X_the_rest,
+                                                   X_train,
+                                                   y_the_rest,
+                                                   y_train,
+                                                   X_the_rest_peps,
+                                                   X_train_peps,
+                                                   X_the_rest_encoded_peps,
+                                                   X_train_encoded_peps,
+                                                   random_state=rs)
+
+        # now split the testing and validation sets out of "the_rest"
+        X_test, X_val = X_the_rest[:test_size, :], X_the_rest[test_size:, :]
+        y_test, y_val = y_the_rest[:test_size], y_the_rest[test_size:]
+        X_test_peps, X_val_peps = X_the_rest_peps[:test_size], \
+                                        X_the_rest_peps[test_size:]
+        X_test_encoded_peps, X_val_encoded_peps = X_the_rest_encoded_peps[:test_size, :], \
+                                                        X_the_rest_encoded_peps[test_size:, :]
+
+        # if encode_peptide_sequences:
+        # resolve common peptide sequences
+        X_test, X_val, y_test, y_val, X_test_peps, X_val_peps, X_test_encoded_peps, X_val_encoded_peps = \
+            eliminate_common_peptides_between_sets(X_test,
+                                                   X_val,
+                                                   y_test,
+                                                   y_val,
+                                                   X_test_peps,
+                                                   X_val_peps,
+                                                   X_test_encoded_peps,
+                                                   X_val_encoded_peps,
+                                                   random_state=rs)
+
+        assert X_train.shape[0] == y_train.shape[0] == X_train_peps.shape[0]
+        assert X_test.shape[0] == y_test.shape[0]
+        assert X_train.shape[1] == X_test.shape[1]
+
+        # normalize the Xs
+        input_scalar = input_scalar.fit(X_train)
+        X_train = input_scalar.transform(X_train)  # keras.utils.normalize(X_train, 0)
+        input_scalar = input_scalar.fit(X_test)
+        X_test = input_scalar.transform(X_test)  # keras.utils.normalize(X_test, 0)
+        input_scalar = input_scalar.fit(X_val)
+        X_val = input_scalar.transform(X_val)  # keras.utils.normalize(X_test, 0)
+
+        X_train_encoded_peps = keras.utils.normalize(X_train_encoded_peps, 0)
+        X_test_encoded_peps = keras.utils.normalize(X_test_encoded_peps, 0)
+        X_val_encoded_peps = keras.utils.normalize(X_val_encoded_peps, 0)
+
+        self.X_train = X_train
+        self.X_test = X_test
+        self.X_val = X_val
+        self.X_train_peps = X_train_peps
+        self.X_test_peps = X_test_peps
+        self.X_val_peps = X_val_peps
+        self.X_train_encoded_peps = X_train_encoded_peps
+        self.X_test_encoded_peps = X_test_encoded_peps
+        self.X_val_encoded_peps = X_val_encoded_peps
+        self.y_train = y_train
+        self.y_test = y_test
+        self.y_val = y_val
 
     def add_mhcflurry_predictions(self):
         """
@@ -291,7 +409,7 @@ class MhcValidator:
         if self.mhc_class == 'II':
             raise RuntimeError('MhcFlurry is only compatible with MHC class I')
         if self.feature_matrix is None:
-            self.prepare_data()
+            raise RuntimeError('It looks like you haven\'t loaded any data. Load some data!')
         print('Running MhcFlurry')
         with tf.compat.v1.Session():
             from mhcflurry import Class1PresentationPredictor
@@ -317,7 +435,7 @@ class MhcValidator:
             alleles = self.alleles
 
         if self.feature_matrix is None:
-            self.prepare_data()
+            raise RuntimeError('It looks like you haven\'t loaded any data. Load some data!')
         print(f'Running NetMHC{"II" if self.mhc_class=="II" else ""}pan')
         netmhcpan = NetMHCpanHelper(peptides=self.peptides,
                                     alleles=alleles,
@@ -488,132 +606,12 @@ class MhcValidator:
         if clear_session:
             K.clear_session()
 
-        X = self.feature_matrix.to_numpy(dtype=np.float32)
-        if alternate_labels is None:
-            y = np.array(self.labels, dtype=np.float32)
-        else:
-            y = alternate_labels
-        peptides = np.array(self.peptides)
-
-        assert X.shape[0] == y.shape[0]
-
         if random_seed is None:
             random_seed = self.random_seed
         tf.random.set_seed(random_seed)
-        rs = RandomState(seed=random_seed)
         np.random.seed(random_seed)
-        input_scalar = MinMaxScaler()
 
-        # save X and y before we do any shuffling. We will need this in the original order for predictions later
-        self.X = deepcopy(X)
-        if self.y is None:
-            # if y exists, we don't want to overwrite it with "alternate_labels". Those are intended for fine tuning.
-            self.y = deepcopy(y)
-        #self.X = keras.utils.normalize(self.X, 0)
-        input_scalar = input_scalar.fit(self.X)  #THIS RETURNS THE FITTED SCALAR??????!?!?!?!?!
-        self.X = input_scalar.transform(self.X)
 
-        if encode_peptide_sequences:
-            encoder = EncodableSequences(list(self.peptides))
-            padding = 'pad_middle' if self.mhc_class == 'I' else 'left_pad_right_pad'
-            encoded_peps = encoder.variable_length_to_fixed_length_vector_encoding('BLOSUM62',
-                                                                                   max_length=self.max_len,
-                                                                                   alignment_method=padding)
-            if self.mhc_class == 'I':
-                encoded_pep_length = self.max_len
-            else:
-                encoded_pep_length = 2 * self.max_len
-            encoded_peps = keras.utils.normalize(encoded_peps, 0)
-            self.X = [self.X, encoded_peps]
-        else:
-            encoded_pep_length = self.max_len
-
-        # first get training and testing sets
-        random_index = rs.permutation(X.shape[0])
-        X = X[random_index]
-        y = y[random_index]
-        shuffled_peps = peptides[random_index]
-
-        test_size = int(X.shape[0] * holdout_split)
-        X_train, X_test = X[test_size:, :], X[:test_size, :]
-        y_train, y_test = y[test_size:], self.y[random_index][:test_size]
-        X_train_peps, X_test_peps = shuffled_peps[test_size:], shuffled_peps[:test_size]
-
-        #if encode_peptide_sequences:
-        # ensure we don't have common peptide sequences between train and test sets
-        def swap(A, B, i, j):
-            A[i], B[j] = B[j], A[i].copy()
-            return A, B
-        print("Ensuring train and test sets do not share peptide sequences")
-        while len(set(X_train_peps) & set(X_test_peps)) > 0:
-            print(f'{len(set(X_train_peps) & set(X_test_peps))} common sequence(s) remaining')
-            test_peps = set(X_test_peps)
-            for i in range(len(X_train_peps)):
-                if X_train_peps[i] in test_peps:
-                    j = rs.choice(range(len(X_test_peps)))
-                    while y_train[i] != y_test[j]:
-                        # make sure we are swapping targets for targets and decoys for decoys
-                        j = rs.choice(range(len(X_test_peps)))
-                    X_train, X_test = swap(X_train, X_test, i, j)
-                    y_train, y_test = swap(y_train, y_test, i, j)
-                    X_train_peps, X_test_peps = swap(X_train_peps, X_test_peps, i, j)
-
-        assert X_train.shape[0] == y_train.shape[0] == X_train_peps.shape[0]
-        assert X_test.shape[0] == y_test.shape[0]
-        assert X_train.shape[1] == X_test.shape[1]
-
-        # Then get the good scoring targets and all decoys for training set
-        #idx = self.get_confident_indices(random_index[test_size:], quantile=conf_threshold)
-
-        #X_train, y_train, X_train_peps = X_train[idx], y_train[idx], X_train_peps[idx]
-
-        # normalize everything
-        input_scalar = input_scalar.fit(X_train)
-        X_train = input_scalar.transform(X_train)  # keras.utils.normalize(X_train, 0)
-        input_scalar = input_scalar.fit(X_test)
-        X_test = input_scalar.transform(X_test)  # keras.utils.normalize(X_test, 0)
-        if encode_peptide_sequences:
-            # training peptides
-            if lstm_model:
-                encoded_peps = pad_and_encode_multiple_aa_seq(list(X_train_peps), padding='post',
-                                                              max_length=self.max_len)
-            else:
-                encoder = EncodableSequences(list(X_train_peps))
-                padding = 'pad_middle' if self.mhc_class == 'I' else 'left_pad_right_pad'
-                encoded_peps = encoder.variable_length_to_fixed_length_vector_encoding('BLOSUM62',
-                                                                                       max_length=self.max_len,
-                                                                                       alignment_method=padding)
-            X_train_peps = keras.utils.normalize(encoded_peps, 0)
-            training_set = [X_train, X_train_peps]
-
-            # testing peptides
-            if lstm_model:
-                encoded_peps = pad_and_encode_multiple_aa_seq(list(X_test_peps), padding='post',
-                                                              max_length=self.max_len)
-            else:
-                encoder = EncodableSequences(list(X_test_peps))
-                padding = 'pad_middle' if self.mhc_class == 'I' else 'left_pad_right_pad'
-                encoded_peps = encoder.variable_length_to_fixed_length_vector_encoding('BLOSUM62',
-                                                                                       max_length=self.max_len,
-                                                                                       alignment_method=padding)
-            X_test_peps = keras.utils.normalize(encoded_peps, 0)
-            testing_set = [X_test, X_test_peps]
-        else:
-            training_set = X_train
-            testing_set = X_test
-        self.X_test = testing_set
-        self.y_test = y_test
-
-        # shuffle the X_train and y_train one last time
-        assert y_train.shape[0] == X_train.shape[0]
-        random_index = rs.permutation(y_train.shape[0])
-        if encode_peptide_sequences:
-            training_set = [training_set[0][random_index], training_set[1][random_index]]
-        else:
-            training_set = training_set[random_index]
-        y_train = y_train[random_index]
-        self.X_train = training_set
-        self.y_train = y_train
         if weight_samples:
             print('Calculating sample weights')
             if isinstance(self.X_train, list):
@@ -632,10 +630,7 @@ class MhcValidator:
             self.training_weights = np.ones(self.y_train.shape[0])
 
         if encode_peptide_sequences:
-            if lstm_model:
-                get_model = get_model_with_lstm_peptide_encoding
-            else:
-                get_model = get_bigger_model_with_peptide_encoding2
+            get_model = get_bigger_model_with_peptide_encoding2
         else:
             get_model = get_model_without_peptide_encoding
 
@@ -649,6 +644,10 @@ class MhcValidator:
 
         callbacks_list = [checkpoint, early_stopping]
         optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
+        if self.mhc_class == 'I':
+            encoded_pep_length = self.max_len
+        else:
+            encoded_pep_length = 2 * self.max_len
         self.model = get_model(self.feature_matrix.shape[1], max_pep_length=encoded_pep_length)
         self.model.compile(loss=loss_fn,
                            optimizer=optimizer,
@@ -657,19 +656,36 @@ class MhcValidator:
         if initial_model_weights is not None:
             self.model.load_weights(initial_model_weights)
 
-        self.fit_history = self.model.fit(self.X_train,
+        if encode_peptide_sequences:
+            X_train = [self.X_train, self.X_train_encoded_peps]
+            X_val = [self.X_val, self.X_val_encoded_peps]
+            X_test = [self.X_test, self.X_test_encoded_peps]
+            X = [self.X, self.X_encoded_peps]
+        else:
+            X_train = self.X_train
+            X_val = self.X_val
+            X_test = self.X_test
+            X = self.X
+        from collections import Counter
+        peptide_counts = Counter(self.X_train_peps)
+        weights = np.array([1/peptide_counts[x] for x in self.X_train_peps])
+
+        self.fit_history = self.model.fit(X_train,
                                           self.y_train,
-                                          sample_weight=self.training_weights,
+                                          validation_data=(X_val, self.y_val),
+                                          sample_weight=weights,
                                           epochs=epochs,
                                           batch_size=batch_size,
                                           verbose=fit_verbosity,
-                                          validation_split=validation_split,
                                           callbacks=callbacks_list)
 
         # load the best model
         self.model.load_weights(model_name)
 
-        self.predictions = self.model.predict(self.X).flatten()
+        self.predictions = self.model.predict(X).flatten()
+        self.training_predictions = self.model.predict(X_train).flatten()
+        self.testing_predictions = self.model.predict(X_test).flatten()
+        self.validation_predictions = self.model.predict(X_val).flatten()
         if report_vebosity > 0:
             print('Calculating PSM-level q-values')
         self.qs = calculate_qs(self.predictions, self.y, higher_better=True)
@@ -687,7 +703,7 @@ class MhcValidator:
         n_psm_targets = np.sum(psm_target_mask)
         n_unique_psms = len(np.unique(self.peptides[psm_target_mask]))
         n_unique_peps = np.sum((pep_qs <= 0.01) & (pep_ys == 1))
-        evaluate = self.model.evaluate(self.X_test, self.y_test, batch_size=batch_size, verbose=0)
+        evaluate = self.model.evaluate(X_test, self.y_test, batch_size=batch_size, verbose=0)
 
         report = '\n========== REPORT ==========\n\n' \
                  f'Total PSMs: {len(self.labels)}\n' \
@@ -714,8 +730,10 @@ class MhcValidator:
 
         if report_vebosity > 0:
             print(report)
-        self.raw_data['v_prob'] = list(self.predictions)
-        self.raw_data['q_value'] = list(self.qs)
+        self.raw_data['mhcv_prob'] = list(self.predictions)
+        self.raw_data['mhcv_q-value'] = list(self.qs)
+        self.raw_data['mhcv_label'] = list(self.labels)
+        self.raw_data['mhcv_peptide'] = list(self.peptides)
         if visualize and report_dir is not None:
             self.visualize_training(outdir=report_dir)
         elif not visualize and report_dir is not None:
@@ -1105,7 +1123,7 @@ class MhcValidator:
             plt.show()
         plt.clf()
 
-        train_predictions = self.model.predict(self.X_train)
+        train_predictions = self.training_predictions
         _, bins, _ = plt.hist(x=np.array(train_predictions[self.y_train == 0]).flatten(),
                               label='Decoy', bins=30, alpha=0.6)
         plt.hist(x=np.array(train_predictions[self.y_train == 1]).flatten(),
@@ -1120,7 +1138,22 @@ class MhcValidator:
             plt.show()
         plt.clf()
 
-        test_predictions = self.model.predict(self.X_test)
+        val_predictions = self.validation_predictions
+        _, bins, _ = plt.hist(x=np.array(val_predictions[self.y_val == 0]).flatten(),
+                              label='Decoy', bins=30, alpha=0.6)
+        plt.hist(x=np.array(val_predictions[self.y_val == 1]).flatten(),
+                 label='Target', bins=30, alpha=0.6, range=(bins[0], bins[-1]))
+        plt.title('Validation data')
+        if log_yscale:
+            plt.yscale('log')
+        plt.legend()
+        if outdir is not None:
+            plt.savefig(str(Path(outdir, 'validation_distribution.svg')))
+        if not save_only:
+            plt.show()
+        plt.clf()
+
+        test_predictions = self.testing_predictions
         _, bins, _ = plt.hist(x=np.array(test_predictions[self.y_test == 0]).flatten(),
                               label='Decoy', bins=30, alpha=0.6)
         plt.hist(x=np.array(test_predictions[self.y_test == 1]).flatten(),
