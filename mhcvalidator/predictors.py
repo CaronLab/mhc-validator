@@ -467,19 +467,14 @@ class MhcValidator:
             validation_split: float = 0.33,
             learning_rate: float = 0.001,
             early_stopping_patience: int = 15,
-            subset: np.array = None,
             weight_samples: bool = False,
             decoy_factor=1,
             target_factor=1,
             decoy_bias=1,
             target_bias=1,
-            #conf_threshold: float = 0.33,
             visualize: bool = True,
             report_dir: Union[str, PathLike] = None,
             random_seed: int = None,
-            feature_qvalue_cutoff_for_training: float = None,
-            mhc_only_for_training_cutoff: bool = False,
-            n: int = 2,
             return_model: bool = False,
             fit_verbosity: int = 2,
             report_vebosity: int = 1,
@@ -519,37 +514,19 @@ class MhcValidator:
         self.X = input_scalar.transform(self.X)
 
         if encode_peptide_sequences:
-            # add encoded sequences to self.X
-            if lstm_model:
-                encoded_peps = pad_and_encode_multiple_aa_seq(list(self.peptides), padding='post',
-                                                              max_length=self.max_len)
+            encoder = EncodableSequences(list(self.peptides))
+            padding = 'pad_middle' if self.mhc_class == 'I' else 'left_pad_right_pad'
+            encoded_peps = encoder.variable_length_to_fixed_length_vector_encoding('BLOSUM62',
+                                                                                   max_length=self.max_len,
+                                                                                   alignment_method=padding)
+            if self.mhc_class == 'I':
                 encoded_pep_length = self.max_len
             else:
-                encoder = EncodableSequences(list(self.peptides))
-                padding = 'pad_middle' if self.mhc_class == 'I' else 'left_pad_right_pad'
-                encoded_peps = encoder.variable_length_to_fixed_length_vector_encoding('BLOSUM62',
-                                                                                       max_length=self.max_len,
-                                                                                       alignment_method=padding)
-                if self.mhc_class == 'I':
-                    encoded_pep_length = self.max_len
-                else:
-                    encoded_pep_length = 2 * self.max_len
+                encoded_pep_length = 2 * self.max_len
             encoded_peps = keras.utils.normalize(encoded_peps, 0)
             self.X = [self.X, encoded_peps]
         else:
             encoded_pep_length = self.max_len
-        if subset is not None and feature_qvalue_cutoff_for_training is not None:
-            raise ValueError("'subset' and 'decoy_training_rank' cannot both be defined.")
-        if subset is not None:
-            X = X[subset]
-            y = y[subset]
-            peptides = peptides[subset]
-        if feature_qvalue_cutoff_for_training is not None:
-            mask = self.get_qvalue_mask(self.feature_matrix.to_numpy(np.float32), np.array(self.labels),
-                                        feature_qvalue_cutoff_for_training, n, mhc_only_for_training_cutoff)
-            X = X[mask]
-            y = y[mask]
-            peptides = peptides[mask]
 
         # first get training and testing sets
         random_index = rs.permutation(X.shape[0])
@@ -562,14 +539,21 @@ class MhcValidator:
         y_train, y_test = y[test_size:], self.y[random_index][:test_size]
         X_train_peps, X_test_peps = shuffled_peps[test_size:], shuffled_peps[:test_size]
 
+        #if encode_peptide_sequences:
         # ensure we don't have common peptide sequences between train and test sets
         def swap(A, B, i, j):
             A[i], B[j] = B[j], A[i].copy()
             return A, B
-        while len(set(X_train_peps) - set(X_test_peps)) > 0:
+        print("Ensuring train and test sets do not share peptide sequences")
+        while len(set(X_train_peps) & set(X_test_peps)) > 0:
+            print(f'{len(set(X_train_peps) & set(X_test_peps))} common sequence(s) remaining')
+            test_peps = set(X_test_peps)
             for i in range(len(X_train_peps)):
-                if X_train_peps[i] in X_test_peps:
+                if X_train_peps[i] in test_peps:
                     j = rs.choice(range(len(X_test_peps)))
+                    while y_train[i] != y_test[j]:
+                        # make sure we are swapping targets for targets and decoys for decoys
+                        j = rs.choice(range(len(X_test_peps)))
                     X_train, X_test = swap(X_train, X_test, i, j)
                     y_train, y_test = swap(y_train, y_test, i, j)
                     X_train_peps, X_test_peps = swap(X_train_peps, X_test_peps, i, j)
@@ -586,7 +570,7 @@ class MhcValidator:
         # normalize everything
         input_scalar = input_scalar.fit(X_train)
         X_train = input_scalar.transform(X_train)  # keras.utils.normalize(X_train, 0)
-        #input_scalar = input_scalar.fit(X_test)
+        input_scalar = input_scalar.fit(X_test)
         X_test = input_scalar.transform(X_test)  # keras.utils.normalize(X_test, 0)
         if encode_peptide_sequences:
             # training peptides
@@ -736,6 +720,8 @@ class MhcValidator:
             self.visualize_training(outdir=report_dir)
         elif not visualize and report_dir is not None:
             self.visualize_training(outdir=report_dir, save_only=True)
+        elif visualize:
+            self.visualize_training()
         if report_dir is not None:
             with open(Path(report_dir, 'training_report.txt'), 'w') as f:
                 f.write(report)
