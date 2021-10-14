@@ -338,7 +338,7 @@ class MhcValidator:
                                                         shuffled_encoded_peps[test_size + validation_size:, :]
 
         # resolve common peptide sequences
-        X_the_rest, X_train, y_the_rest, y_train, X_the_rest_peps, X_train_peps, X_the_rest_encoded_peps, X_train_encoded_peps = \
+        '''X_the_rest, X_train, y_the_rest, y_train, X_the_rest_peps, X_train_peps, X_the_rest_encoded_peps, X_train_encoded_peps = \
             eliminate_common_peptides_between_sets(X_the_rest,
                                                    X_train,
                                                    y_the_rest,
@@ -347,7 +347,7 @@ class MhcValidator:
                                                    X_train_peps,
                                                    X_the_rest_encoded_peps,
                                                    X_train_encoded_peps,
-                                                   random_state=rs)
+                                                   random_state=rs)'''
 
         # now split the testing and validation sets out of "the_rest"
         X_test, X_val = X_the_rest[:test_size, :], X_the_rest[test_size:, :]
@@ -359,7 +359,7 @@ class MhcValidator:
 
         # if encode_peptide_sequences:
         # resolve common peptide sequences
-        X_test, X_val, y_test, y_val, X_test_peps, X_val_peps, X_test_encoded_peps, X_val_encoded_peps = \
+        '''X_test, X_val, y_test, y_val, X_test_peps, X_val_peps, X_test_encoded_peps, X_val_encoded_peps = \
             eliminate_common_peptides_between_sets(X_test,
                                                    X_val,
                                                    y_test,
@@ -368,7 +368,7 @@ class MhcValidator:
                                                    X_val_peps,
                                                    X_test_encoded_peps,
                                                    X_val_encoded_peps,
-                                                   random_state=rs)
+                                                   random_state=rs)'''
 
         assert X_train.shape[0] == y_train.shape[0] == X_train_peps.shape[0]
         assert X_test.shape[0] == y_test.shape[0]
