@@ -974,6 +974,7 @@ class MhcValidator:
                     validation_splits: List[float] = (0.33,),
                     output_dir: str = None,
                     encode_peptide_sequences: bool = False,
+                    test_stratify_based_on_MHC_presentation: bool = True,
                     visualize: bool = False,
                     title: str = None):
         """
@@ -1011,6 +1012,11 @@ class MhcValidator:
         total = len(batch_sizes) * len(epochs)
         i = 1
 
+        if test_stratify_based_on_MHC_presentation:
+            stratify = [True, False]
+        else:
+            stratify = [False]
+
         print(f'Saving plots to {pdf_file}')
 
         with plt_pdf.PdfPages(pdf_file) as pdf:
@@ -1020,91 +1026,94 @@ class MhcValidator:
                         for validation_split in validation_splits:
                             for holdout_split in holdout_splits:
                                 for early_stopping_patience in early_stopping_patiences:
-                                    print(f'\nStep {i}/{total}'
-                                          f' - epochs: {max_epochs}'
-                                          f' - batch size: {batch_size}'
-                                          f' - early stopping patience: {early_stopping_patience}'
-                                          f' - holdout split: {holdout_split}'
-                                          f' - validation split: {validation_split}'
-                                          f' - learning rate: {learning_rate}')
-                                    print('Fitting model...')
+                                    for test_stratify in stratify:
+                                        print(f'\nStep {i}/{total}'
+                                              f' - epochs: {max_epochs}'
+                                              f' - batch size: {batch_size}'
+                                              f' - early stopping patience: {early_stopping_patience}'
+                                              f' - holdout split: {holdout_split}'
+                                              f' - validation split: {validation_split}'
+                                              f' - learning rate: {learning_rate}')
+                                        print('Fitting model...')
 
-                                    i += 1
-                                    self.run(batch_size=batch_size,
-                                             epochs=max_epochs,
-                                             learning_rate=learning_rate,
-                                             early_stopping_patience=early_stopping_patience,
-                                             fit_verbosity=0,
-                                             report_vebosity=0,
-                                             visualize=False,
-                                             encode_peptide_sequences=encode_peptide_sequences,
-                                             validation_split=validation_split,
-                                             holdout_split=holdout_split)
+                                        i += 1
+                                        self.run(batch_size=batch_size,
+                                                 epochs=max_epochs,
+                                                 learning_rate=learning_rate,
+                                                 early_stopping_patience=early_stopping_patience,
+                                                 fit_verbosity=0,
+                                                 report_vebosity=0,
+                                                 visualize=False,
+                                                 encode_peptide_sequences=encode_peptide_sequences,
+                                                 validation_split=validation_split,
+                                                 holdout_split=holdout_split,
+                                                 stratify_based_on_MHC_presentation=test_stratify)
 
-                                    xs = range(1, len(self.fit_history.history['val_loss']) + 1)
+                                        xs = range(1, len(self.fit_history.history['val_loss']) + 1)
 
-                                    val_loss = np.min(self.fit_history.history['val_loss'])
-                                    stopping_idx = self.fit_history.history['val_loss'].index(val_loss)
+                                        val_loss = np.min(self.fit_history.history['val_loss'])
+                                        stopping_idx = self.fit_history.history['val_loss'].index(val_loss)
 
-                                    n_psms_01 = np.sum((self.qs <= 0.01) & (self.labels == 1))
-                                    n_uniqe_peps_01 = len(np.unique(self.peptides[(self.qs <= 0.01) & (self.labels == 1)]))
+                                        n_psms_01 = np.sum((self.qs <= 0.01) & (self.labels == 1))
+                                        n_uniqe_peps_01 = len(np.unique(self.peptides[(self.qs <= 0.01) & (self.labels == 1)]))
 
-                                    n_psms_05 = np.sum((self.qs <= 0.05) & (self.labels == 1))
-                                    n_uniqe_peps_05 = len(np.unique(self.peptides[(self.qs <= 0.05) & (self.labels == 1)]))
+                                        n_psms_05 = np.sum((self.qs <= 0.05) & (self.labels == 1))
+                                        n_uniqe_peps_05 = len(np.unique(self.peptides[(self.qs <= 0.05) & (self.labels == 1)]))
 
-                                    text = f'Estimated max possible target PSMs: {theoretical_possible_targets}\n' \
-                                           f'  Target PSMs at 1% FDR: {n_psms_01}\n' \
-                                           f'  Target peptides at 1% FDR: {n_uniqe_peps_01}\n' \
-                                           f'  Target PSMs at 5% FDR: {n_psms_05}\n' \
-                                           f'  Target peptides at 5% FDR: {n_uniqe_peps_05}\n\n'\
-                                           f'Title: {title}\n' \
-                                           f'  epochs: {max_epochs}\n'\
-                                           f'  batch size: {batch_size}\n'\
-                                           f'  early stopping patience: {early_stopping_patience}\n'\
-                                           f'  holdout split: {holdout_split}\n'\
-                                           f'  validation split: {validation_split}\n'\
-                                           f'  learning rate: {learning_rate}'
+                                        text = f'Estimated max possible target PSMs: {theoretical_possible_targets}\n' \
+                                               f'  Target PSMs at 1% FDR: {n_psms_01}\n' \
+                                               f'  Target peptides at 1% FDR: {n_uniqe_peps_01}\n' \
+                                               f'  Target PSMs at 5% FDR: {n_psms_05}\n' \
+                                               f'  Target peptides at 5% FDR: {n_uniqe_peps_05}\n\n'\
+                                               f'Title: {title}\n' \
+                                               f'  stratification based on MHC preds: {test_stratify}\n' \
+                                               f'  epochs: {max_epochs}\n'\
+                                               f'  batch size: {batch_size}\n'\
+                                               f'  early stopping patience: {early_stopping_patience}\n'\
+                                               f'  holdout split: {holdout_split}\n'\
+                                               f'  validation split: {validation_split}\n'\
+                                               f'  learning rate: {learning_rate}'
 
-                                    fig, (ax, text_ax) = plt.subplots(2, 1, figsize=(8, 10))
-                                    text_ax.axis('off')
+                                        fig, (ax, text_ax) = plt.subplots(2, 1, figsize=(8, 10))
+                                        text_ax.axis('off')
 
-                                    tl = ax.plot(xs, self.fit_history.history['loss'], c='#3987bc', label='Training loss')
-                                    vl = ax.plot(xs, self.fit_history.history['val_loss'], c='#ff851a', label='Validation loss')
-                                    ax.set_ylabel('Loss')
-                                    ax2 = ax.twinx()
-                                    ta = ax2.plot(xs, self.fit_history.history['accuracy'], c='#3987bc', label='Training accuracy', ls='--')
-                                    va = ax2.plot(xs, self.fit_history.history['val_accuracy'], c='#ff851a', label='Validation accuracy', ls='--')
-                                    ax2.set_ylabel('Accuracy')
-                                    ax.plot(range(1, max_epochs+1), [val_loss] * max_epochs, ls=':', c='gray')
-                                    ma = ax2.plot(range(1, max_epochs+1), [max_accuracy] * max_epochs, ls='-.', c='k', zorder=0,
-                                                  label='Predicted max accuracy')
-                                    bm = ax.plot(self.fit_history.history['val_loss'].index(val_loss) + 1, val_loss,
-                                                 marker='o', mec='red', mfc='none', ms='12', ls='none', label='best model')
+                                        tl = ax.plot(xs, self.fit_history.history['loss'], c='#3987bc', label='Training loss')
+                                        vl = ax.plot(xs, self.fit_history.history['val_loss'], c='#ff851a', label='Validation loss')
+                                        ax.set_ylabel('Loss')
+                                        ax2 = ax.twinx()
+                                        ta = ax2.plot(xs, self.fit_history.history['accuracy'], c='#3987bc', label='Training accuracy', ls='--')
+                                        va = ax2.plot(xs, self.fit_history.history['val_accuracy'], c='#ff851a', label='Validation accuracy', ls='--')
+                                        ax2.set_ylabel('Accuracy')
+                                        ax.plot(range(1, max_epochs+1), [val_loss] * max_epochs, ls=':', c='gray')
+                                        ma = ax2.plot(range(1, max_epochs+1), [max_accuracy] * max_epochs, ls='-.', c='k', zorder=0,
+                                                      label='Predicted max accuracy')
+                                        bm = ax.plot(self.fit_history.history['val_loss'].index(val_loss) + 1, val_loss,
+                                                     marker='o', mec='red', mfc='none', ms='12', ls='none', label='best model')
 
-                                    lines = tl + vl + bm + ta + va + ma
-                                    labels = [l.get_label() for l in lines]
-                                    plt.legend(lines, labels, bbox_to_anchor=(0, -.12, 1, 0), loc='upper center',
-                                               mode='expand', ncol=2)
+                                        lines = tl + vl + bm + ta + va + ma
+                                        labels = [l.get_label() for l in lines]
+                                        plt.legend(lines, labels, bbox_to_anchor=(0, -.12, 1, 0), loc='upper center',
+                                                   mode='expand', ncol=2)
 
-                                    ax.set_xlabel('Epoch')
-                                    ylim = ax.get_ylim()
+                                        ax.set_xlabel('Epoch')
+                                        ylim = ax.get_ylim()
 
-                                    ax.plot([stopping_idx + 1, stopping_idx + 1], [0, 1], ls=':', c='gray')
-                                    ax.set_ylim(ylim)
-                                    ax.set_xlim((1, max_epochs))
-                                    ax2.set_xlim((1, max_epochs))
+                                        ax.plot([stopping_idx + 1, stopping_idx + 1], [0, 1], ls=':', c='gray')
+                                        ax.set_ylim(ylim)
+                                        ax.set_xlim((1, max_epochs))
+                                        ax2.set_xlim((1, max_epochs))
 
-                                    text_ax.text(0, 0.1, text, transform=text_ax.transAxes, size=14)
+                                        text_ax.text(0, 0.1, text, transform=text_ax.transAxes, size=14)
 
-                                    plt.tight_layout()
-                                    if visualize:
-                                        plt.show()
+                                        plt.tight_layout()
+                                        if visualize:
+                                            plt.show()
 
-                                    pdf.savefig(fig)
+                                        pdf.savefig(fig)
 
-                                    #if output_dir:
-                                    #    self.raw_data.to_csv(str(Path(output_dir) / f'{self.filename}_MhcV.txt'),
-                                    #                         index=False)
+                                        #if output_dir:
+                                        #    self.raw_data.to_csv(str(Path(output_dir) / f'{self.filename}_MhcV.txt'),
+                                        #                         index=False)
 
     def visualize_training(self, outdir: Union[str, PathLike] = None, log_yscale: bool = False, save_only: bool = False):
         if self.fit_history is None or self.X_test is None or self.y_test is None:
