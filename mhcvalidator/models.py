@@ -89,7 +89,7 @@ def get_model_with_lstm_peptide_encoding(ms_feature_length: int,
     return model
 
 
-def get_bigger_model_with_peptide_encoding2(ms_feature_length: int, max_pep_length: int = 15, dropout: float = 0.5):
+def get_bigger_model_with_peptide_encoding2(ms_feature_length: int, max_pep_length: int = 15, dropout: float = 0.6):
     pep_input = keras.Input(shape=(max_pep_length, 21))
     p = layers.BatchNormalization(input_shape=(max_pep_length, 21))(pep_input)
     p = layers.Conv1D(12, 4, padding="valid", activation=tf.nn.tanh)(p)
@@ -111,8 +111,6 @@ def get_bigger_model_with_peptide_encoding2(ms_feature_length: int, max_pep_leng
     x = layers.Dropout(dropout)(x)
     x = layers.Dense(n_nodes, activation=tf.nn.relu)(x)
     x = layers.Dropout(dropout)(x)
-    x = layers.Dense(n_nodes, activation=tf.nn.relu)(x)
-    x = layers.Dropout(dropout)(x)
     output = layers.Dense(1, activation=tf.nn.sigmoid)(x)
     #ms_out_flat = layers.Flatten()(x)
 
@@ -126,12 +124,10 @@ def get_bigger_model_with_peptide_encoding2(ms_feature_length: int, max_pep_leng
     return model
 
 
-def get_model_without_peptide_encoding(ms_feature_length: int, max_pep_length: int, dropout: float = 0.4):
+def get_model_without_peptide_encoding(ms_feature_length: int, max_pep_length: int, dropout: float = 0.6):
     n_nodes = ms_feature_length * 3
     input = keras.Input(shape=(ms_feature_length,))
     x = layers.BatchNormalization(input_shape=(ms_feature_length,))(input)
-    x = layers.Dense(n_nodes, activation=tf.nn.relu)(x)
-    x = layers.Dropout(dropout)(x)
     x = layers.Dense(n_nodes, activation=tf.nn.relu)(x)
     x = layers.Dropout(dropout)(x)
     x = layers.Dense(n_nodes, activation=tf.nn.relu)(x)
