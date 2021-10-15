@@ -605,7 +605,6 @@ class MhcValidator:
 
     def run(self,
             encode_peptide_sequences: bool = False,
-            lstm_model: bool = False,
             epochs: int = 16,
             batch_size: int = 256,
             loss_fn=tf.losses.BinaryCrossentropy(),  # =weighted_bce(10, 2, 0.5),
@@ -613,11 +612,12 @@ class MhcValidator:
             validation_split: float = 0.33,
             learning_rate: float = 0.001,
             early_stopping_patience: int = 15,
-            weight_samples: bool = False,
-            decoy_factor=1,
-            target_factor=1,
-            decoy_bias=1,
-            target_bias=1,
+            stratify_based_on_MHC_presentation: bool = True,
+            #weight_samples: bool = False,
+            #decoy_factor=1,
+            #target_factor=1,
+            #decoy_bias=1,
+            #target_bias=1,
             visualize: bool = True,
             report_dir: Union[str, PathLike] = None,
             random_seed: int = None,
@@ -639,8 +639,14 @@ class MhcValidator:
         tf.random.set_seed(random_seed)
         np.random.seed(random_seed)
 
+        # prepare data for training
+        self.prepare_data(validation_split=validation_split,
+                          holdout_split=holdout_split,
+                          random_seed=random_seed,
+                          stratification_dimensions=2 if stratify_based_on_MHC_presentation else 1)
 
-        if weight_samples:
+
+        '''if weight_samples:
             print('Calculating sample weights')
             if isinstance(self.X_train, list):
                 self.training_weights = self.get_sample_weights(self.X_train[0], self.y_train,
@@ -655,7 +661,7 @@ class MhcValidator:
                                                                 target_factor=target_factor,
                                                                 target_bias=target_bias)
         else:
-            self.training_weights = np.ones(self.y_train.shape[0])
+            self.training_weights = np.ones(self.y_train.shape[0])'''
 
         if encode_peptide_sequences:
             get_model = get_model_with_peptide_encoding
