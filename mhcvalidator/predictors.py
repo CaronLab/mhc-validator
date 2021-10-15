@@ -16,7 +16,7 @@ from mhcvalidator.losses_and_metrics import weighted_bce, total_fdr, precision_m
 from mhcvalidator.fdr import calculate_qs, calculate_peptide_level_qs, calculate_roc
 import matplotlib.pyplot as plt
 from mhcflurry.encodable_sequences import EncodableSequences
-from mhcvalidator.models import get_model_without_peptide_encoding, get_bigger_model_with_peptide_encoding2, get_model_with_lstm_peptide_encoding
+from mhcvalidator.models import get_model_without_peptide_encoding, get_model_with_peptide_encoding
 from mhcvalidator.peptides import clean_peptide_sequences
 from mhcnames import normalize_allele_name
 from copy import deepcopy
@@ -658,7 +658,7 @@ class MhcValidator:
             self.training_weights = np.ones(self.y_train.shape[0])
 
         if encode_peptide_sequences:
-            get_model = get_bigger_model_with_peptide_encoding2
+            get_model = get_model_with_peptide_encoding
         else:
             get_model = get_model_without_peptide_encoding
 
