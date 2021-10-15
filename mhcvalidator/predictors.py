@@ -21,13 +21,14 @@ from mhcvalidator.peptides import clean_peptide_sequences
 from mhcnames import normalize_allele_name
 from copy import deepcopy
 from scipy.stats import percentileofscore
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.preprocessing import MinMaxScaler
 from datetime import datetime
 from mhcvalidator.encoding import pad_and_encode_multiple_aa_seq
 # from mhcvalidator.mhcnugget_helper import get_mhcnuggets_preds  # mhcnuggets seems to be broken with current versions of tensorflow
 from mhcvalidator.libraries import load_library, filter_library
 import tempfile
+from collections import Counter
 # This can be uncommented to prevent the GPU from getting used.
 #import os
 #os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
@@ -278,18 +279,37 @@ class MhcValidator:
                                                use_features=use_features)
         self.feature_names = list(self.feature_matrix.columns)
 
-    def prepare_data(self, validation_split: float = 0.33, holdout_split: float = 0.33, random_seed: int = None):
+    def prepare_data(self, validation_split: float = 0.33, holdout_split: float = 0.33, random_seed: int = None,
+                     stratification_dimensions: int = 2):
         """
-        Split examples into training, validation, and testing sets. Ensure there are no common peptides sequences
-        between the sets. Encode peptide features. Note that the training set is implicitly what does not
-        go into the validation and testing sets. Be sure to leave a reasonable amount of data for it.
+        Encode peptide sequences and split examples into training, validation, and testing sets. Optionally, ensure
+        there are no common peptides sequences between the sets (this might result in imbalanced sets). Note that the
+        training set is implicitly what does not go into the validation and testing sets.
+        Be sure to leave a reasonable amount of data for it.
+
         :param validation_split: float between 0 and 1. Portion of the dataset to go into the validation set.
         :param holdout_split: float between 0 and 1. Portion of the dataset to go into the testing set.
         :param random_seed:
+        :param stratification_dimensions: An integer in {1, 2}. If 1, only the target-decoy label is used for
+        stratification. If 2, new classes are made for MhcFlurry and/or NetMHCpan which indicates if the respective
+        peptide is predicted to be presented by any alleles or not (i.e. %rank  > 2% for any alleles is class 1, else
+        is class 2). This ensures there are predicted binders and non-binders in the training, validation, and testing
+        sets. For high-quality data this is not really necessary, but for low quality data with few identifiable
+        spectra or few predicted binders it can make a difference.
         :return:
         """
         if self.raw_data is None:
             raise AttributeError("Data has not yet been loaded.")
+        if stratification_dimensions not in [1, 2]:
+            raise ValueError("stratification_dimensions must be in {1, 2}.")
+        if validation_split + holdout_split > 1:
+            raise ValueError("The validation and holdout splits cannot sum to greater than one.")
+        if validation_split + holdout_split > 0.75:
+            print(f'WARNING: The validation and holdout splits sum to {validation_split + holdout_split}. '
+                  f'Only {1 - validation_split - holdout_split} of the data is going into the training set.')
+
+        if random_seed is None:
+            random_seed = self.random_seed
 
         X = self.feature_matrix.to_numpy(dtype=np.float32)
         y = np.array(self.labels, dtype=np.float32)
@@ -297,18 +317,13 @@ class MhcValidator:
 
         assert X.shape[0] == y.shape[0]
 
-        if random_seed is None:
-            random_seed = self.random_seed
-        tf.random.set_seed(random_seed)
-        rs = RandomState(seed=random_seed)
-        np.random.seed(random_seed)
         input_scalar = MinMaxScaler()
-
         # save X and y before we do any shuffling. We will need this in the original order for predictions later
         self.X = deepcopy(X)
+        self.y = deepcopy(y)
+
         input_scalar = input_scalar.fit(self.X)
         self.X = input_scalar.transform(self.X)
-        self.y = deepcopy(y)
 
         # encode all peptide sequences
         encoder = EncodableSequences(list(self.peptides))
@@ -319,56 +334,69 @@ class MhcValidator:
         encoded_peps = keras.utils.normalize(encoded_peps, 0)
         self.X_encoded_peps = encoded_peps
 
+        if stratification_dimensions == 1:
+            stratification = y
+        else:
+            mhcflurry = []
+            netmhcpan = []
+            for c in self.feature_matrix.columns:
+                if 'MhcFlurry_PresentationScore' in c:
+                    mhcflurry.append(c)
+                elif 'NetMHCpan_EL_score' in c:
+                    netmhcpan.append(c)
+            if not mhcflurry and not netmhcpan:
+                print("No MHC binding predictions found. Using target-decoy label only for stratification.")
+                stratification = y
+            else:
+                decoy_medians = self.feature_matrix.loc[y == 0, mhcflurry + netmhcpan].median(axis=0)
+                # are any predictions greater than twice the decoy median?
+                y2 = np.max(self.feature_matrix > 2 * decoy_medians, axis=1).astype(int)
+                stratification = np.concatenate((y[:, np.newaxis], y2[:, np.newaxis]), axis=1)
+
         # first get training and testing sets
-        random_index = rs.permutation(X.shape[0])
-        X = X[random_index]
-        y = y[random_index]
-        shuffled_peps = peptides[random_index]
-        shuffled_encoded_peps = self.X_encoded_peps[random_index]
+        (X_train, X_the_rest,  y_train, y_the_rest,  X_train_peps,
+         X_the_rest_peps,  X_train_encoded_peps, X_the_rest_encoded_peps, _, stratification) = train_test_split(
+            X, y, peptides, encoded_peps, stratification,
+            random_state=random_seed,
+            stratify=stratification,
+            test_size=validation_split+holdout_split
+        )
 
-        test_size = int(X.shape[0] * holdout_split)
-        validation_size = int(X.shape[0] * validation_split)
-
-        # first separate out the training set
-        X_the_rest, X_train = X[:test_size + validation_size:, :], X[test_size + validation_size:, :]
-        y_the_rest, y_train = y[:test_size + validation_size], y[test_size + validation_size:]
-        X_the_rest_peps, X_train_peps = shuffled_peps[:test_size + validation_size], \
-                                        shuffled_peps[test_size + validation_size:]
-        X_the_rest_encoded_peps, X_train_encoded_peps = shuffled_encoded_peps[:test_size + validation_size, :], \
-                                                        shuffled_encoded_peps[test_size + validation_size:, :]
-
-        # resolve common peptide sequences
-        '''X_the_rest, X_train, y_the_rest, y_train, X_the_rest_peps, X_train_peps, X_the_rest_encoded_peps, X_train_encoded_peps = \
-            eliminate_common_peptides_between_sets(X_the_rest,
-                                                   X_train,
-                                                   y_the_rest,
-                                                   y_train,
-                                                   X_the_rest_peps,
-                                                   X_train_peps,
-                                                   X_the_rest_encoded_peps,
-                                                   X_train_encoded_peps,
-                                                   random_state=rs)'''
+        '''# resolve common peptide sequences
+        if prevent_common_peptides:
+            X_the_rest, X_train, y_the_rest, y_train, X_the_rest_peps, X_train_peps, X_the_rest_encoded_peps, X_train_encoded_peps = \
+                eliminate_common_peptides_between_sets(X_the_rest,
+                                                       X_train,
+                                                       y_the_rest,
+                                                       y_train,
+                                                       X_the_rest_peps,
+                                                       X_train_peps,
+                                                       X_the_rest_encoded_peps,
+                                                       X_train_encoded_peps,
+                                                       random_state=np.random.RandomState(random_seed))'''
 
         # now split the testing and validation sets out of "the_rest"
-        X_test, X_val = X_the_rest[:test_size, :], X_the_rest[test_size:, :]
-        y_test, y_val = y_the_rest[:test_size], y_the_rest[test_size:]
-        X_test_peps, X_val_peps = X_the_rest_peps[:test_size], \
-                                        X_the_rest_peps[test_size:]
-        X_test_encoded_peps, X_val_encoded_peps = X_the_rest_encoded_peps[:test_size, :], \
-                                                        X_the_rest_encoded_peps[test_size:, :]
+        (X_test, X_val, y_test, y_val, X_test_peps,
+         X_val_peps, X_test_encoded_peps, X_val_encoded_peps) = train_test_split(
+            X_the_rest, y_the_rest, X_the_rest_peps, X_the_rest_encoded_peps,
+            random_state=random_seed+1,
+            stratify=stratification,
+            test_size=validation_split/(validation_split+holdout_split)
+        )
 
         # if encode_peptide_sequences:
         # resolve common peptide sequences
-        '''X_test, X_val, y_test, y_val, X_test_peps, X_val_peps, X_test_encoded_peps, X_val_encoded_peps = \
-            eliminate_common_peptides_between_sets(X_test,
-                                                   X_val,
-                                                   y_test,
-                                                   y_val,
-                                                   X_test_peps,
-                                                   X_val_peps,
-                                                   X_test_encoded_peps,
-                                                   X_val_encoded_peps,
-                                                   random_state=rs)'''
+        '''if prevent_common_peptides:
+            X_test, X_val, y_test, y_val, X_test_peps, X_val_peps, X_test_encoded_peps, X_val_encoded_peps = \
+                eliminate_common_peptides_between_sets(X_test,
+                                                       X_val,
+                                                       y_test,
+                                                       y_val,
+                                                       X_test_peps,
+                                                       X_val_peps,
+                                                       X_test_encoded_peps,
+                                                       X_val_encoded_peps,
+                                                       random_state=np.random.RandomState(random_seed))'''
 
         assert X_train.shape[0] == y_train.shape[0] == X_train_peps.shape[0]
         assert X_test.shape[0] == y_test.shape[0]
@@ -643,6 +671,7 @@ class MhcValidator:
         early_stopping = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=early_stopping_patience)
 
         callbacks_list = [checkpoint, early_stopping]
+        # create optimizer, model
         optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
         if self.mhc_class == 'I':
             encoded_pep_length = self.max_len
@@ -653,9 +682,11 @@ class MhcValidator:
                            optimizer=optimizer,
                            metrics=['accuracy'])
 
+        # load weights from an existing model if specified
         if initial_model_weights is not None:
             self.model.load_weights(initial_model_weights)
 
+        # if we are encoding peptide sequences, add them to the input
         if encode_peptide_sequences:
             X_train = [self.X_train, self.X_train_encoded_peps]
             X_val = [self.X_val, self.X_val_encoded_peps]
@@ -666,7 +697,8 @@ class MhcValidator:
             X_val = self.X_val
             X_test = self.X_test
             X = self.X
-        from collections import Counter
+
+        #
         peptide_counts = Counter(self.X_train_peps)
         weights = np.array([1/peptide_counts[x] for x in self.X_train_peps])
 
