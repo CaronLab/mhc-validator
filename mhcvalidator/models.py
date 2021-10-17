@@ -30,7 +30,8 @@ def get_model_with_lstm_peptide_encoding(ms_feature_length: int,
     return model
 
 
-def get_model_with_peptide_encoding(ms_feature_length: int, max_pep_length: int = 15, dropout: float = 0.6):
+def get_model_with_peptide_encoding(ms_feature_length: int, max_pep_length: int = 15, dropout: float = 0.6,
+                                    hidden_layers: int = 3):
     pep_input = keras.Input(shape=(max_pep_length, 21))
     p = layers.BatchNormalization(input_shape=(max_pep_length, 21))(pep_input)
     p = layers.Conv1D(12, 4, padding="valid", activation=tf.nn.tanh)(p)
@@ -41,14 +42,11 @@ def get_model_with_peptide_encoding(ms_feature_length: int, max_pep_length: int 
 
     ms_feature_input = keras.Input(shape=(ms_feature_length,))
     x = layers.BatchNormalization(input_shape=(ms_feature_length,))(ms_feature_input)
-    ms_plus_pep = layers.concatenate([x, pep_out_flat])
-    n_nodes = int(int(ms_plus_pep.shape[1]) * 3)
-    x = layers.Dense(n_nodes, activation=tf.nn.relu)(ms_plus_pep)
-    x = layers.Dropout(dropout)(x)
-    x = layers.Dense(n_nodes, activation=tf.nn.relu)(x)
-    x = layers.Dropout(dropout)(x)
-    x = layers.Dense(n_nodes, activation=tf.nn.relu)(x)
-    x = layers.Dropout(dropout)(x)
+    x = layers.concatenate([x, pep_out_flat])
+    n_nodes = int(int(x.shape[1]) * 3)
+    for i in range(hidden_layers):
+        x = layers.Dense(n_nodes, activation=tf.nn.relu)(x)
+        x = layers.Dropout(dropout)(x)
     output = layers.Dense(1, activation=tf.nn.sigmoid)(x)
 
     model = keras.Model(inputs=[ms_feature_input, pep_input], outputs=output)
@@ -56,16 +54,14 @@ def get_model_with_peptide_encoding(ms_feature_length: int, max_pep_length: int 
     return model
 
 
-def get_model_without_peptide_encoding(ms_feature_length: int, max_pep_length: int, dropout: float = 0.6):
+def get_model_without_peptide_encoding(ms_feature_length: int, max_pep_length: int, dropout: float = 0.6,
+                                       hidden_layers: int = 3):
     n_nodes = ms_feature_length * 3
     input = keras.Input(shape=(ms_feature_length,))
     x = layers.BatchNormalization(input_shape=(ms_feature_length,))(input)
-    x = layers.Dense(n_nodes, activation=tf.nn.relu)(x)
-    x = layers.Dropout(dropout)(x)
-    x = layers.Dense(n_nodes, activation=tf.nn.relu)(x)
-    x = layers.Dropout(dropout)(x)
-    x = layers.Dense(n_nodes, activation=tf.nn.relu)(x)
-    x = layers.Dropout(dropout)(x)
+    for i in range(hidden_layers):
+        x = layers.Dense(n_nodes, activation=tf.nn.relu)(x)
+        x = layers.Dropout(dropout)(x)
     output = layers.Dense(1, activation=tf.nn.sigmoid)(x)
 
     model = keras.Model(inputs=input, outputs=output)
