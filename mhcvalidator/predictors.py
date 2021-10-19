@@ -1128,7 +1128,7 @@ class MhcValidator:
                                                     plt.show()
 
                                                 pdf.savefig(fig)
-                                                plt.clf()
+                                                plt.close('all')
 
                                                 #if output_dir:
                                                 #    self.raw_data.to_csv(str(Path(output_dir) / f'{self.filename}_MhcV.txt'),
@@ -1260,6 +1260,7 @@ class MhcValidator:
         if not save_only:
             plt.show()
         plt.clf()
+        plt.close('all')
 
     def write_table(self, filename: Union[str, PathLike] = None):
         if self.predictions is None or self.model is None:
