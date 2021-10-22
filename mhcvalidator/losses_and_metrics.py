@@ -27,6 +27,7 @@ def weighted_bce(weight_on_FP: float = 10, weight_on_uncertain: float = 1, bce_w
         return K.mean(bce * (FP_weight + center_weight + bce_weight))
     return loss
 
+
 def i_dunno_bce() -> callable:
     def loss(y_true, y_pred):
         min = K.min(y_pred)
@@ -37,12 +38,27 @@ def i_dunno_bce() -> callable:
     return loss
 
 
+def tensor_percentile(tensor: tf.Tensor, q):
+    """
+    Calculate the qth percentile of a 1 dimensional tensor. E.g. of the predicitons of a binary classifier.
+    Very simple implementation.
+    :param tensor:
+    :param q:
+    :return:
+    """
+    n = K.cast(K.shape(tensor)[0], tf.float32)
+    if n == 0:
+        return None
+    idx = int(n * q)
+    return tensor[q]
+
+
 def global_accuracy(y_true, y_pred):
     decoy_mask = tf.equal(y_true, 0)
     decoys = tf.boolean_mask(y_pred, decoy_mask)
-    if tf.less(K.cast(K.shape(decoys)[0], tf.float32), 1): #<-- NO! use tf.cond()
-        return K.cast(0, tf.float32)
-    median_decoy = tfp.stats.percentile(decoys, 50.)
+    median_decoy = tf.cond(tf.less(K.cast(K.shape(decoys)[0], tf.float32), 1),
+                           lambda: K.cast(0.5, tf.float32),
+                           lambda: tfp.stats.percentile(decoys, 50.))
     max = K.max(y_pred)
     y_adjusted = K.clip(tf.round((y_pred - median_decoy) / (max - median_decoy)), 0, 1)
     correct_targets = y_adjusted * y_true
