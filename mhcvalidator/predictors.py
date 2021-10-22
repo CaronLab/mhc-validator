@@ -29,11 +29,15 @@ from mhcvalidator.encoding import pad_and_encode_multiple_aa_seq
 from mhcvalidator.libraries import load_library, filter_library
 import tempfile
 from collections import Counter
+import tensorflow.python.util.deprecation as deprecation
+
+deprecation._PRINT_DEPRECATION_WARNINGS = False
+
 # This can be uncommented to prevent the GPU from getting used.
 #import os
 #os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
-from scipy.stats import gmean as geom_mean
+#from scipy.stats import gmean as geom_mean
 
 #tf.config.threading.set_inter_op_parallelism_threads(0)
 #tf.config.threading.set_intra_op_parallelism_threads(0)
@@ -633,7 +637,8 @@ class MhcValidator:
             report_vebosity: int = 1,
             clear_session: bool = True,
             alternate_labels=None,
-            initial_model_weights: str = None):
+            initial_model_weights: str = None,
+            keep_best_model: bool = True):
 
         #with self.graph.as_default():
         #tf.compat.v1.enable_eager_execution()
@@ -728,7 +733,8 @@ class MhcValidator:
                                           callbacks=callbacks_list)
 
         # load the best model
-        self.model.load_weights(model_name)
+        if keep_best_model:
+            self.model.load_weights(model_name)
 
         self.predictions = self.model.predict(X).flatten()
         self.training_predictions = self.model.predict(X_train).flatten()
@@ -758,9 +764,9 @@ class MhcValidator:
                  f'Labeled as targets: {n_targets}\n' \
                  f'Labeled as decoys: {n_decoys}\n' \
                  f'Global FDR: {round(n_decoys / n_targets, 3)}\n' \
-                 f'Theoretical number of possible true positives: {n_targets - n_decoys}\n' \
+                 f'Theoretical number of possible true positives (PSMs): {n_targets - n_decoys}\n' \
                  f'Theoretical maximum global accuracy: {round((n_decoys + (n_targets - n_decoys)) / len(self.labels), 3)}\n' \
-                 f'  --Be wary if the testing accuracy is much higher than this value.\n'\
+                 f'  --Be wary if the accuracies below are higher than this value.\n'\
                  '----- CONFIDENT PSMS AND PEPTIDES -----\n'\
                  f'Target PSMs at 1% FDR: {n_psm_targets}\n'\
                  f'Unique peptides at 1% PSM-level FDR: {n_unique_psms}\n' \
@@ -1105,9 +1111,9 @@ class MhcValidator:
                                                 vl = ax.plot(xs, self.fit_history.history['val_loss'], c='#ff851a', label='Validation loss')
                                                 ax.set_ylabel('Loss')
                                                 ax2 = ax.twinx()
-                                                ta = ax2.plot(xs, self.fit_history.history['accuracy'], c='#3987bc', label='Training accuracy', ls='--')
-                                                va = ax2.plot(xs, self.fit_history.history['val_accuracy'], c='#ff851a', label='Validation accuracy', ls='--')
-                                                ax2.set_ylabel('Accuracy')
+                                                ta = ax2.plot(xs, self.fit_history.history['global_accuracy'], c='#3987bc', label='Training accuracy', ls='--')
+                                                va = ax2.plot(xs, self.fit_history.history['val_global_accuracy'], c='#ff851a', label='Validation accuracy', ls='--')
+                                                ax2.set_ylabel('Accuracy (targets and decoys)')
                                                 ax.plot(range(1, max_epochs+1), [val_loss] * max_epochs, ls=':', c='gray')
                                                 ma = ax2.plot(range(1, max_epochs+1), [max_accuracy] * max_epochs, ls='-.', c='k', zorder=0,
                                                               label='Predicted max accuracy')
@@ -1168,7 +1174,7 @@ class MhcValidator:
         ax2 = ax.twinx()
         ta = ax2.plot(xs, self.fit_history.history['global_accuracy'], c='#3987bc', label='Training accuracy', ls='--')
         va = ax2.plot(xs, self.fit_history.history['val_global_accuracy'], c='#ff851a', label='Validation accuracy', ls='--')
-        ax2.set_ylabel('Global accuracy')
+        ax2.set_ylabel('Global accuracy (targets and decoys)')
         ax.plot(xs, [val_loss] * n_epochs, ls=':', c='gray')
         ma = ax2.plot(xs, [max_accuracy] * n_epochs, ls='-.', c='k', zorder=0,
                       label='Predicted max accuracy')
@@ -1195,59 +1201,67 @@ class MhcValidator:
             plt.show()
         plt.clf()
 
-        train_predictions = self.training_predictions
+        train_predictions = np.log10(self.training_predictions)
         _, bins, _ = plt.hist(x=np.array(train_predictions[self.y_train == 0]).flatten(),
-                              label='Decoy', bins=30, alpha=0.6)
+                              label='Decoy', bins=100, alpha=0.6)
         plt.hist(x=np.array(train_predictions[self.y_train == 1]).flatten(),
-                 label='Target', bins=30, alpha=0.6, range=(bins[0], bins[-1]))
+                 label='Target', bins=100, alpha=0.6, range=(bins[0], bins[-1]))
         plt.title('Training data')
         if log_yscale:
             plt.yscale('log')
         plt.legend()
+        plt.xlabel("log10(target probability)")
+        plt.ylabel("PSM count")
         if outdir is not None:
             plt.savefig(str(Path(outdir, 'training_distribution.svg')))
         if not save_only:
             plt.show()
         plt.clf()
 
-        val_predictions = self.validation_predictions
+        val_predictions = np.log10(self.validation_predictions)
         _, bins, _ = plt.hist(x=np.array(val_predictions[self.y_val == 0]).flatten(),
-                              label='Decoy', bins=30, alpha=0.6)
+                              label='Decoy', bins=100, alpha=0.6)
         plt.hist(x=np.array(val_predictions[self.y_val == 1]).flatten(),
-                 label='Target', bins=30, alpha=0.6, range=(bins[0], bins[-1]))
+                 label='Target', bins=100, alpha=0.6, range=(bins[0], bins[-1]))
         plt.title('Validation data')
         if log_yscale:
             plt.yscale('log')
         plt.legend()
+        plt.xlabel("log10(target probability)")
+        plt.ylabel("PSM count")
         if outdir is not None:
             plt.savefig(str(Path(outdir, 'validation_distribution.svg')))
         if not save_only:
             plt.show()
         plt.clf()
 
-        test_predictions = self.testing_predictions
+        test_predictions = np.log10(self.testing_predictions)
         _, bins, _ = plt.hist(x=np.array(test_predictions[self.y_test == 0]).flatten(),
-                              label='Decoy', bins=30, alpha=0.6)
+                              label='Decoy', bins=100, alpha=0.6)
         plt.hist(x=np.array(test_predictions[self.y_test == 1]).flatten(),
-                 label='Target', bins=30, alpha=0.6, range=(bins[0], bins[-1]))
+                 label='Target', bins=100, alpha=0.6, range=(bins[0], bins[-1]))
         plt.title('Testing data')
         if log_yscale:
             plt.yscale('log')
         plt.legend()
+        plt.xlabel("log10(target probability)")
+        plt.ylabel("PSM count")
         if outdir is not None:
             plt.savefig(str(Path(outdir, 'testing_distribution.svg')))
         if not save_only:
             plt.show()
         plt.clf()
 
-        predictions = self.predictions
-        _, bins, _ = plt.hist(x=np.array(predictions[self.y == 0]).flatten(), label='Decoy', bins=30, alpha=0.6)
-        plt.hist(x=np.array(predictions[self.y == 1]).flatten(), label='Target', bins=30, alpha=0.6,
+        predictions = np.log10(self.predictions)
+        _, bins, _ = plt.hist(x=np.array(predictions[self.y == 0]).flatten(), label='Decoy', bins=100, alpha=0.6)
+        plt.hist(x=np.array(predictions[self.y == 1]).flatten(), label='Target', bins=100, alpha=0.6,
                  range=(bins[0], bins[-1]))
         plt.title('All data')
         if log_yscale:
             plt.yscale('log')
         plt.legend()
+        plt.xlabel("log10(target probability)")
+        plt.ylabel("PSM count")
         if outdir is not None:
             plt.savefig(str(Path(outdir, 'all_data_distribution.svg')))
         if not save_only:
