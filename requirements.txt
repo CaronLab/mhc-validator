@@ -1,5 +1,6 @@
 mhcflurry>=2.0.2
 tensorflow
+tensorflow_probability
 numpy
 pandas
 mhcnames

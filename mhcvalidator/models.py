@@ -1,6 +1,6 @@
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras import layers
+from tensorflow.keras import layers, regularizers
 from tensorflow.keras import backend as K
 
 def get_model_with_lstm_peptide_encoding(ms_feature_length: int,

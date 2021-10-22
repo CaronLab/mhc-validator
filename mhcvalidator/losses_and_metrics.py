@@ -1,4 +1,5 @@
 import tensorflow as tf
+import tensorflow_probability as tfp
 import tensorflow.keras as keras
 from tensorflow.keras import backend as K
 import numpy as np
@@ -25,6 +26,30 @@ def weighted_bce(weight_on_FP: float = 10, weight_on_uncertain: float = 1, bce_w
         bce = K.binary_crossentropy(y_true, y_pred)
         return K.mean(bce * (FP_weight + center_weight + bce_weight))
     return loss
+
+def i_dunno_bce() -> callable:
+    def loss(y_true, y_pred):
+        min = K.min(y_pred)
+        max = K.max(y_pred)
+        y = (y_pred - min) / (max - min)
+        bce = K.binary_crossentropy(y_true, y)
+        return K.mean(bce)
+    return loss
+
+
+def global_accuracy(y_true, y_pred):
+    decoy_mask = tf.equal(y_true, 0)
+    decoys = tf.boolean_mask(y_pred, decoy_mask)
+    if tf.less(K.cast(K.shape(decoys)[0], tf.float32), 1): #<-- NO! use tf.cond()
+        return K.cast(0, tf.float32)
+    median_decoy = tfp.stats.percentile(decoys, 50.)
+    max = K.max(y_pred)
+    y_adjusted = K.clip(tf.round((y_pred - median_decoy) / (max - median_decoy)), 0, 1)
+    correct_targets = y_adjusted * y_true
+    correct_decoys = (1 - y_adjusted) * (1 - y_true)
+    n = K.cast(K.shape(y_pred)[0], tf.float32)
+    acc = (K.sum(correct_decoys) + K.sum(correct_targets)) / n
+    return acc
 
 
 def total_fdr(y_true, y_pred):

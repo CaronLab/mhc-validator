@@ -12,7 +12,7 @@ from mhcvalidator.features import prepare_features, eliminate_common_peptides_be
 from mhcvalidator.predictions_parsers import add_mhcflurry_to_feature_matrix, add_netmhcpan_to_feature_matrix
 from mhcvalidator.netmhcpan_helper import NetMHCpanHelper, format_class_II_allele
 from mhcvalidator.constants import COMMON_AA, SUPERTYPES
-from mhcvalidator.losses_and_metrics import weighted_bce, total_fdr, precision_m, n_psms_at_1percent_fdr
+from mhcvalidator.losses_and_metrics import i_dunno_bce, global_accuracy, total_fdr
 from mhcvalidator.fdr import calculate_qs, calculate_peptide_level_qs, calculate_roc
 import matplotlib.pyplot as plt
 from mhcflurry.encodable_sequences import EncodableSequences
@@ -292,8 +292,8 @@ class MhcValidator:
         :param random_seed:
         :param stratification_dimensions: An integer in {1, 2}. If 1, only the target-decoy label is used for
         stratification. If 2, new classes are made for MhcFlurry and/or NetMHCpan which indicates if the respective
-        peptide is predicted to be presented by any alleles or not (i.e. %rank  > 2% for any alleles is class 1, else
-        is class 2). This ensures there are predicted binders and non-binders in the training, validation, and testing
+        peptide is predicted to be presented by any alleles or not (i.e. %rank  > 2% for any alleles is class 0, else
+        is class 1). This ensures there are predicted binders and non-binders in the training, validation, and testing
         sets. For high-quality data this is not really necessary, but for low quality data with few identifiable
         spectra or few predicted binders it can make a difference.
         :return:
@@ -333,6 +333,12 @@ class MhcValidator:
                                                                                alignment_method=padding)
         encoded_peps = keras.utils.normalize(encoded_peps, 0)
         self.X_encoded_peps = encoded_peps
+
+        # shuffle things myself before handing it over to sklearn...
+        #random_index = np.random.RandomState(random_seed).choice(a=X.shape[0], size=X.shape[0], replace=False)
+        #X = X[random_index]
+        #y = y[random_index]
+        #peptides = peptides[random_index]
 
         if stratification_dimensions == 1:
             stratification = y
@@ -439,15 +445,14 @@ class MhcValidator:
         if self.feature_matrix is None:
             raise RuntimeError('It looks like you haven\'t loaded any data. Load some data!')
         print('Running MhcFlurry')
-        with tf.compat.v1.Session():
-            from mhcflurry import Class1PresentationPredictor
-            predictor = Class1PresentationPredictor.load()
-            preds = predictor.predict(peptides=self.peptides,
-                                      alleles={x: [x] for x in self.alleles},
-                                      #n_flanks=self.n_flanks,
-                                      #c_flanks=self.c_flanks,
-                                      include_affinity_percentile=True,
-                                      )
+        from mhcflurry import Class1PresentationPredictor
+        predictor = Class1PresentationPredictor.load()
+        preds = predictor.predict(peptides=self.peptides,
+                                  alleles={x: [x] for x in self.alleles},
+                                  #n_flanks=self.n_flanks,
+                                  #c_flanks=self.c_flanks,
+                                  include_affinity_percentile=True,
+                                  )
         self.feature_matrix = add_mhcflurry_to_feature_matrix(self.feature_matrix, preds)
 
     def add_netmhcpan_predictions(self, n_processes: int = 0):
@@ -614,7 +619,7 @@ class MhcValidator:
             early_stopping_patience: int = 15,
             dropout: float = 0.5,
             hidden_layers: int = 3,
-            stratify_based_on_MHC_presentation: bool = True,
+            stratify_based_on_MHC_presentation: bool = False,
             #weight_samples: bool = False,
             #decoy_factor=1,
             #target_factor=1,
@@ -691,7 +696,7 @@ class MhcValidator:
                                max_pep_length=encoded_pep_length)
         self.model.compile(loss=loss_fn,
                            optimizer=optimizer,
-                           metrics=['accuracy'])
+                           metrics=[global_accuracy])
 
         # load weights from an existing model if specified
         if initial_model_weights is not None:
@@ -710,12 +715,13 @@ class MhcValidator:
             X = self.X
 
         #
-        #peptide_counts = Counter(self.X_train_peps)
+        peptide_counts = Counter(self.X_train_peps)
+        weights = np.array([1/np.sqrt(peptide_counts[x]) for x in self.X_train_peps])
         #weights = np.array([1/peptide_counts[x] for x in self.X_train_peps])
         self.fit_history = self.model.fit(X_train,
                                           self.y_train,
                                           validation_data=(X_val, self.y_val),
-                                          #sample_weight=weights,
+                                          sample_weight=weights,
                                           epochs=epochs,
                                           batch_size=batch_size,
                                           verbose=fit_verbosity,
@@ -764,8 +770,8 @@ class MhcValidator:
                  f'Training loss: {round(self.fit_history.history["loss"][stopping_idx], 3)} - '\
                  f'Validation loss: {round(self.fit_history.history["val_loss"][stopping_idx], 3)} - '\
                  f'Testing loss: {round(evaluate[0], 3)}\n'\
-                 f'Training accuracy: {round(self.fit_history.history["accuracy"][stopping_idx], 3)} - '\
-                 f'Validation accuracy: {round(self.fit_history.history["val_accuracy"][stopping_idx], 3)} - '\
+                 f'Training accuracy: {round(self.fit_history.history["global_accuracy"][stopping_idx], 3)} - '\
+                 f'Validation accuracy: {round(self.fit_history.history["val_global_accuracy"][stopping_idx], 3)} - '\
                  f'Testing accuracy: {round(evaluate[1], 3)}\n' \
                  f'\n' \
                  f'Best model: {model_name}'
@@ -1160,9 +1166,9 @@ class MhcValidator:
         vl = ax.plot(xs, self.fit_history.history['val_loss'], c='#ff851a', label='Validation loss')
         ax.set_ylabel('Loss')
         ax2 = ax.twinx()
-        ta = ax2.plot(xs, self.fit_history.history['accuracy'], c='#3987bc', label='Training accuracy', ls='--')
-        va = ax2.plot(xs, self.fit_history.history['val_accuracy'], c='#ff851a', label='Validation accuracy', ls='--')
-        ax2.set_ylabel('Accuracy')
+        ta = ax2.plot(xs, self.fit_history.history['global_accuracy'], c='#3987bc', label='Training accuracy', ls='--')
+        va = ax2.plot(xs, self.fit_history.history['val_global_accuracy'], c='#ff851a', label='Validation accuracy', ls='--')
+        ax2.set_ylabel('Global accuracy')
         ax.plot(xs, [val_loss] * n_epochs, ls=':', c='gray')
         ma = ax2.plot(xs, [max_accuracy] * n_epochs, ls='-.', c='k', zorder=0,
                       label='Predicted max accuracy')
