@@ -624,11 +624,7 @@ class MhcValidator:
             dropout: float = 0.5,
             hidden_layers: int = 3,
             stratify_based_on_MHC_presentation: bool = False,
-            #weight_samples: bool = False,
-            #decoy_factor=1,
-            #target_factor=1,
-            #decoy_bias=1,
-            #target_bias=1,
+            weight_by_inverse_peptide_counts: bool = True,
             visualize: bool = True,
             report_dir: Union[str, PathLike] = None,
             random_seed: int = None,
@@ -638,7 +634,7 @@ class MhcValidator:
             clear_session: bool = True,
             alternate_labels=None,
             initial_model_weights: str = None,
-            keep_best_model: bool = True):
+            keep_best_loss: bool = True):
 
         #with self.graph.as_default():
         #tf.compat.v1.enable_eager_execution()
@@ -721,8 +717,10 @@ class MhcValidator:
 
         #
         peptide_counts = Counter(self.X_train_peps)
-        weights = np.array([1/np.sqrt(peptide_counts[x]) for x in self.X_train_peps])
-        #weights = np.array([1/peptide_counts[x] for x in self.X_train_peps])
+        if weight_by_inverse_peptide_counts:
+            weights = np.array([1/np.sqrt(peptide_counts[x]) for x in self.X_train_peps])
+        else:
+            weights = np.ones_like(self.y_train)
         self.fit_history = self.model.fit(X_train,
                                           self.y_train,
                                           validation_data=(X_val, self.y_val),
@@ -733,7 +731,7 @@ class MhcValidator:
                                           callbacks=callbacks_list)
 
         # load the best model
-        if keep_best_model:
+        if keep_best_loss:
             self.model.load_weights(model_name)
 
         self.predictions = self.model.predict(X).flatten()
@@ -751,8 +749,10 @@ class MhcValidator:
         n_decoys = np.sum(self.labels == 0)
 
         min_val_loss = np.min(self.fit_history.history['val_loss'])
-        stopping_idx = self.fit_history.history['val_loss'].index(min_val_loss)
-        pep_qs, pep_xs, pep_ys, peps = calculate_peptide_level_qs(self.predictions, self.y, self.peptides, higher_better=True)
+        stopping_idx = self.fit_history.history['val_loss'].index(min_val_loss) if keep_best_loss else \
+            len(self.fit_history.history['val_loss']) - 1
+        pep_qs, pep_xs, pep_ys, peps = calculate_peptide_level_qs(self.predictions, self.y, self.peptides,
+                                                                  higher_better=True)
         psm_target_mask = (self.qs <= 0.01) & (self.y == 1)
         n_psm_targets = np.sum(psm_target_mask)
         n_unique_psms = len(np.unique(self.peptides[psm_target_mask]))
@@ -789,11 +789,11 @@ class MhcValidator:
         self.raw_data['mhcv_label'] = list(self.labels)
         self.raw_data['mhcv_peptide'] = list(self.peptides)
         if visualize and report_dir is not None:
-            self.visualize_training(outdir=report_dir)
+            self.visualize_training(outdir=report_dir, stopping_idx=stopping_idx)
         elif not visualize and report_dir is not None:
-            self.visualize_training(outdir=report_dir, save_only=True)
+            self.visualize_training(outdir=report_dir, save_only=True, stopping_idx=stopping_idx)
         elif visualize:
-            self.visualize_training()
+            self.visualize_training(stopping_idx=stopping_idx)
         if report_dir is not None:
             with open(Path(report_dir, 'training_report.txt'), 'w') as f:
                 f.write(report)
@@ -1146,7 +1146,8 @@ class MhcValidator:
                                                 #    self.raw_data.to_csv(str(Path(output_dir) / f'{self.filename}_MhcV.txt'),
                                                 #                         index=False)
 
-    def visualize_training(self, outdir: Union[str, PathLike] = None, log_yscale: bool = False, save_only: bool = False):
+    def visualize_training(self, outdir: Union[str, PathLike] = None, log_yscale: bool = False, save_only: bool = False,
+                           stopping_idx: int = None):
         if self.fit_history is None or self.X_test is None or self.y_test is None:
             raise AttributeError("Model has not yet been trained. Use run to train.")
         if outdir is not None:
@@ -1162,7 +1163,8 @@ class MhcValidator:
         xs = range(1, len(self.fit_history.history['val_loss']) + 1)
 
         val_loss = np.min(self.fit_history.history['val_loss'])
-        stopping_idx = self.fit_history.history['val_loss'].index(val_loss)
+        if stopping_idx is None:
+            stopping_idx = self.fit_history.history['val_loss'].index(val_loss)
         n_psms = np.sum((self.qs <= 0.01) & (self.labels == 1))
         n_uniqe_peps = len(np.unique(self.peptides[(self.qs <= 0.01) & (self.labels == 1)]))
 
@@ -1178,7 +1180,7 @@ class MhcValidator:
         ax.plot(xs, [val_loss] * n_epochs, ls=':', c='gray')
         ma = ax2.plot(xs, [max_accuracy] * n_epochs, ls='-.', c='k', zorder=0,
                       label='Predicted max accuracy')
-        bm = ax.plot(self.fit_history.history['val_loss'].index(val_loss) + 1, val_loss,
+        bm = ax.plot(stopping_idx + 1, val_loss,
                      marker='o', mec='red', mfc='none', ms='12', ls='none', label='best model')
 
         lines = tl + vl + bm + ta + va + ma
