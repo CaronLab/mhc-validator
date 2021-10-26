@@ -437,6 +437,62 @@ class MhcValidator:
         self.y_test = y_test
         self.y_val = y_val
 
+    def train_validate_split(self, random_seed: int = None):
+        if self.raw_data is None:
+            raise AttributeError("Data has not yet been loaded.")
+
+        if random_seed is None:
+            random_seed = self.random_seed
+
+        X = self.feature_matrix.to_numpy(dtype=np.float32)
+        y = np.array(self.labels, dtype=np.float32)
+        peptides = np.array(self.peptides, dtype='U100')
+
+        assert X.shape[0] == y.shape[0]
+
+        input_scalar = MinMaxScaler()
+        # save X and y before we do any shuffling. We will need this in the original order for predictions later
+        self.X = deepcopy(X)
+        self.y = deepcopy(y)
+
+        input_scalar = input_scalar.fit(self.X)
+        self.X = input_scalar.transform(self.X)
+
+        # encode all peptide sequences
+        encoder = EncodableSequences(list(self.peptides))
+        padding = 'pad_middle' if self.mhc_class == 'I' else 'left_pad_right_pad'
+        encoded_peps = encoder.variable_length_to_fixed_length_vector_encoding('BLOSUM62',
+                                                                               max_length=self.max_len,
+                                                                               alignment_method=padding)
+        encoded_peps = keras.utils.normalize(encoded_peps, 0)
+        self.X_encoded_peps = encoded_peps
+
+        stratification = y
+        random_idx = np.random.RandomState(random_seed).choice(len(y), size=len(y), replace=False)
+        X = X[random_idx]
+        y = y[random_idx]
+        peptides = peptides[random_idx]
+        encoded_peps = encoded_peps[random_idx]
+        stratification = stratification[random_idx]
+
+
+        # first get training and testing sets
+        (X1, X2,  y1, y2,  peps1, peps2,  encoded_peps1, encoded_peps2, _, stratification) = train_test_split(
+            X, y, peptides, encoded_peps, stratification, train_size=0.5,
+            random_state=random_seed,
+            stratify=stratification)
+
+        # normalize
+        input_scalar = input_scalar.fit(X1)
+        X1 = input_scalar.transform(X1)  # keras.utils.normalize(X_train, 0)
+        input_scalar = input_scalar.fit(X2)
+        X2 = input_scalar.transform(X2)  # keras.utils.normalize(X_test, 0)
+
+        encoded_peps1 = keras.utils.normalize(encoded_peps1, 0)
+        encoded_peps2 = keras.utils.normalize(encoded_peps2, 0)
+
+        return X1, X2,  y1, y2,  peps1, peps2,  encoded_peps1, encoded_peps2
+
     def add_mhcflurry_predictions(self):
         """
         Run MhcFlurry and add presentation predictions to the training feature matrix.
@@ -781,6 +837,164 @@ class MhcValidator:
                 f.write(report)
         if return_model:
             return model_name
+
+    def test_alt_fit(self,
+                     encode_peptide_sequences: bool = False,
+                     epochs: int = 30,
+                     batch_size: int = 256,
+                     loss_fn=tf.losses.BinaryCrossentropy(),
+                     holdout_split: float = 0.25,
+                     validation_split: float = 0.25,
+                     learning_rate: float = 0.001,
+                     early_stopping_patience: int = 15,
+                     dropout: float = 0.5,
+                     hidden_layers: int = 3,
+                     stratify_based_on_MHC_presentation: bool = False,
+                     weight_by_inverse_peptide_counts: bool = True,
+                     visualize: bool = True,
+                     report_dir: Union[str, PathLike] = None,
+                     random_seed: int = None,
+                     return_model: bool = False,
+                     fit_verbosity: int = 2,
+                     report_vebosity: int = 1,
+                     clear_session: bool = True,
+                     alternate_labels=None,
+                     initial_model_weights: str = None,
+                     keep_best_loss: bool = True):
+        if clear_session:
+            K.clear_session()
+
+        if random_seed is None:
+            random_seed = self.random_seed
+        tf.random.set_seed(random_seed)
+        np.random.seed(random_seed)
+
+        X1, X2, y1, y2, peps1, peps2, encoded_peps1, encoded_peps2 = self.train_validate_split(random_seed)
+
+        # CREATE CALLBACKS
+        now = str(datetime.now()).replace(' ', '_').replace(':', '-')
+
+        self.model = {}
+        self.fit_history = {}
+        training_predictions = {}
+        validation_predictions = {}
+        val_qs = {}
+
+        for i in range(2):
+            if encode_peptide_sequences:
+                get_model = get_model_with_peptide_encoding
+            else:
+                get_model = get_model_without_peptide_encoding
+
+            model_name = str(self.model_dir / f'mhcvalidator_{now}_model{i}.h5')
+            checkpoint = keras.callbacks.ModelCheckpoint(model_name,
+                                                         monitor='val_loss', verbose=0,
+                                                         save_best_only=True, mode='min')
+            early_stopping = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=early_stopping_patience)
+
+            callbacks_list = [checkpoint, early_stopping]
+            # create optimizer, model
+            optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
+            if self.mhc_class == 'I':
+                encoded_pep_length = self.max_len
+            else:
+                encoded_pep_length = 2 * self.max_len
+            self.model[i] = get_model(self.feature_matrix.shape[1],
+                                   dropout=dropout,
+                                   hidden_layers=hidden_layers,
+                                   max_pep_length=encoded_pep_length)
+            self.model[i].compile(loss=loss_fn,
+                               optimizer=optimizer,
+                               metrics=[global_accuracy])
+
+            # load weights from an existing model if specified
+            #if initial_model_weights is not None:
+            #    self.model.load_weights(initial_model_weights)
+
+            # if we are encoding peptide sequences, add them to the input
+            if encode_peptide_sequences:
+                X_train = [[X1, X2][i % 2], [encoded_peps1, encoded_peps2][i % 2]]
+                X_val = [[X1, X2][(i+1) % 2], [encoded_peps1, encoded_peps2][(i+1) % 2]]
+            else:
+                X_train = [X1, X2][i % 2]
+                X_val = [X1, X2][(i+1) % 2]
+            y_train = [y1, y2][i % 2]
+            y_val = [y1, y2][(i+1) % 2]
+            peps_train = [peps1, peps2][i % 2]
+            peps_val = [peps1, peps2][(i+1) % 2]
+
+            peptide_counts = Counter(peps_train)
+            if weight_by_inverse_peptide_counts:
+                weights = np.array([1/np.sqrt(peptide_counts[x]) for x in [peps1, peps2][i % 2]])
+            else:
+                weights = np.ones_like([peps1, peps2][i % 2], dtype=np.float32)
+            self.fit_history[i] = self.model[i].fit(X_train,
+                                              y_train,
+                                              validation_data=(X_val, y_val),
+                                              sample_weight=weights,
+                                              epochs=epochs,
+                                              batch_size=batch_size,
+                                              verbose=fit_verbosity,
+                                              callbacks=callbacks_list)
+
+            # load the best model
+            if keep_best_loss:
+                self.model[i].load_weights(model_name)
+
+            training_predictions[i] = self.model[i].predict(X_train).flatten()
+            validation_predictions[i] = self.model[i].predict(X_val).flatten()
+            val_qs[i] = calculate_qs(validation_predictions[i], y_val)
+
+            n_targets = np.sum(y_val == 1)
+            n_decoys = np.sum(y_val == 0)
+            max_accuracy = round((n_decoys + (n_targets - n_decoys)) / len(y_val), 3)
+
+            n_epochs = len(self.fit_history[i].epoch)
+
+            xs = range(1, len(self.fit_history[i].history['val_loss']) + 1)
+
+            val_loss = np.min(self.fit_history[i].history['val_loss'])
+            if keep_best_loss is None:
+                stopping_idx = self.fit_history[i].history['val_loss']
+            else:
+                stopping_idx = len(self.fit_history[i].history['val_loss']) - 1
+            n_psms = np.sum((val_qs[i] <= 0.01) & (y_val == 1))
+            n_uniqe_peps = len(np.unique(peps_val[(val_qs[i] <= 0.01) & (y_val == 1)]))
+
+            fig, ax = plt.subplots()
+
+            tl = ax.plot(xs, self.fit_history[i].history['loss'], c='#3987bc', label='Training loss')
+            vl = ax.plot(xs, self.fit_history[i].history['val_loss'], c='#ff851a', label='Validation loss')
+            ax.set_ylabel('Loss')
+            ax2 = ax.twinx()
+            ta = ax2.plot(xs, self.fit_history[i].history['global_accuracy'], c='#3987bc', label='Training accuracy',
+                          ls='--')
+            va = ax2.plot(xs, self.fit_history[i].history['val_global_accuracy'], c='#ff851a', label='Validation accuracy',
+                          ls='--')
+            ax2.set_ylabel('Global accuracy (targets and decoys)')
+            ax.plot(xs, [val_loss] * n_epochs, ls=':', c='gray')
+            ma = ax2.plot(xs, [max_accuracy] * n_epochs, ls='-.', c='k', zorder=0,
+                          label='Predicted max accuracy')
+            bm = ax.plot(stopping_idx + 1, val_loss,
+                         marker='o', mec='red', mfc='none', ms='12', ls='none', label='best model')
+
+            lines = tl + vl + bm + ta + va + ma
+            labels = [l.get_label() for l in lines]
+            plt.legend(lines, labels, bbox_to_anchor=(0, -.12, 1, 0), loc='upper center',
+                       mode='expand', ncol=2)
+
+            ax.set_xlabel('Epoch')
+            ylim = ax.get_ylim()
+
+            ax.plot([stopping_idx + 1, stopping_idx + 1], [0, 1], ls=':', c='gray')
+            ax.set_ylim(ylim)
+            ax.set_xlim((1, n_epochs))
+            ax2.set_xlim((1, n_epochs))
+            ax.set_title(f'Training curves\n#PSMs={n_psms} - #Peptides={n_uniqe_peps}')
+            plt.tight_layout()
+            plt.show()
+            plt.clf()
+
 
     def run_twice_test(self,
                        encode_peptide_sequences: bool = False,
