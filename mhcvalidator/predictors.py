@@ -616,7 +616,7 @@ class MhcValidator:
             encode_peptide_sequences: bool = False,
             epochs: int = 30,
             batch_size: int = 256,
-            loss_fn=tf.losses.BinaryCrossentropy(),  # =weighted_bce(10, 2, 0.5),
+            loss_fn=tf.losses.BinaryCrossentropy(),
             holdout_split: float = 0.25,
             validation_split: float = 0.25,
             learning_rate: float = 0.001,
@@ -652,24 +652,6 @@ class MhcValidator:
                           holdout_split=holdout_split,
                           random_seed=random_seed,
                           stratification_dimensions=2 if stratify_based_on_MHC_presentation else 1)
-
-
-        '''if weight_samples:
-            print('Calculating sample weights')
-            if isinstance(self.X_train, list):
-                self.training_weights = self.get_sample_weights(self.X_train[0], self.y_train,
-                                                                decoy_factor=decoy_factor,
-                                                                decoy_bias=decoy_bias,
-                                                                target_factor=target_factor,
-                                                                target_bias=target_bias)
-            else:
-                self.training_weights = self.get_sample_weights(self.X_train, self.y_train,
-                                                                decoy_factor=decoy_factor,
-                                                                decoy_bias=decoy_bias,
-                                                                target_factor=target_factor,
-                                                                target_bias=target_bias)
-        else:
-            self.training_weights = np.ones(self.y_train.shape[0])'''
 
         if encode_peptide_sequences:
             get_model = get_model_with_peptide_encoding
@@ -914,72 +896,6 @@ class MhcValidator:
         filtered_lib = filter_library(lib, peptide_list=peps_to_use, lib_format=lib_format)
         pout = Path(filepath).parent / (Path(filepath).stem + f'_{suffix}{Path(filepath).suffix}')
         filtered_lib.to_csv(pout, sep='\t')
-
-    def iterate_training(self,
-                         iterations: int = 2,
-                         fdr_for_iterations: float = 0.05,
-                         encode_peptide_sequences: bool = False,
-                         epochs: int = 30,
-                         batch_size: int = 64,
-                         loss_fn=tf.losses.BinaryCrossentropy(),  # =weighted_bce(10, 2, 0.5),
-                         holdout_split: float = 0.25,
-                         validation_split: float = 0.25,
-                         weight_samples: bool = False,
-                         decoy_factor=1,
-                         target_factor=1,
-                         decoy_bias=1,
-                         target_bias=1,
-                         # conf_threshold: float = 0.33,
-                         visualize: bool = True,
-                         report_dir: Union[str, PathLike] = None,
-                         random_seed: int = None,
-                         decoy_rank_for_training: float = None):
-        if random_seed is None:
-            random_seed = self.random_seed
-        reports = []
-        mask = self.get_rank_subset_mask(self.feature_matrix.to_numpy(np.float32), np.array(self.labels),
-                                         cutoff=decoy_rank_for_training)
-        print('Iteration 1')
-        report = self.run(encode_peptide_sequences=encode_peptide_sequences,
-                          epochs=epochs,
-                          batch_size=batch_size,
-                          loss_fn=loss_fn,
-                          holdout_split=holdout_split,
-                          validation_split=validation_split,
-                          weight_samples=weight_samples,
-                          decoy_factor=decoy_factor,
-                          target_factor=target_factor,
-                          decoy_bias=decoy_bias,
-                          target_bias=target_bias,
-                          visualize=visualize,
-                          report_dir=report_dir,
-                          random_seed=random_seed, subset=mask)
-        reports.append(report)
-        for iteration in range(2, iterations + 1):
-            print(f'Iteration {iteration}')
-            #random_seed += 1
-            random_mask = np.random.RandomState(random_seed).choice(a=[True, False], size=self.y.shape[0], p=[0.15, 0.85])
-            subset = (self.y == 0) | ((self.qs <= fdr_for_iterations) & (self.y == 1)) | ((self.y == 1) & random_mask)
-            report = self.run(encode_peptide_sequences=encode_peptide_sequences,
-                              epochs=epochs,
-                              batch_size=batch_size,
-                              loss_fn=loss_fn,
-                              holdout_split=holdout_split,
-                              validation_split=validation_split,
-                              weight_samples=weight_samples,
-                              decoy_factor=decoy_factor,
-                              target_factor=target_factor,
-                              decoy_bias=decoy_bias,
-                              target_bias=target_bias,
-                              visualize=visualize,
-                              report_dir=report_dir,
-                              random_seed=random_seed,
-                              subset=subset)
-            reports.append(report)
-        for i in range(len(reports)):
-            print(f'########## Iteration {i+1} ##########')
-            print(reports[i])
-            print()
 
     def grid_search(self,
                     batch_sizes: List[int] = (64, 128, 256, 512, 1028, 2056, 4112),
