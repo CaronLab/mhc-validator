@@ -1482,7 +1482,9 @@ class MhcValidator:
         probabilities = H.cumsum() / float(sum(H))
         ax2.plot(bins[:-1], 1 - probabilities, linewidth=1, color="r", label='Decoy probability', ls='--')
         target_probabilities = (T.cumsum() - H.cumsum()) / float(sum(T) - sum(H))
+        pep = (1 - probabilities) / (1 - probabilities + target_probabilities)
         ax2.plot(bins[:-1], target_probabilities, linewidth=1, color="b", label='Target probability', ls='--')
+        ax2.plot(bins[:-1], pep, linewidth=1, color="g", label='PEP', ls='--')
         ax2.set_ylim((0, 1.1))
         if log_yscale:
             plt.yscale('log')
@@ -1507,7 +1509,9 @@ class MhcValidator:
         probabilities = H.cumsum() / float(sum(H))
         ax2.plot(bins[:-1], 1 - probabilities, linewidth=1, color="r", label='Decoy probability', ls='--')
         target_probabilities = (T.cumsum() - H.cumsum()) / float(sum(T) - sum(H))
+        pep = (1 - probabilities) / (1 - probabilities + target_probabilities)
         ax2.plot(bins[:-1], target_probabilities, linewidth=1, color="b", label='Target probability', ls='--')
+        ax2.plot(bins[:-1], pep, linewidth=1, color="g", label='PEP', ls='--')
         ax2.set_ylim((0, 1.1))
         if log_yscale:
             ax.yscale('log')
@@ -1532,7 +1536,9 @@ class MhcValidator:
         probabilities = H.cumsum() / float(sum(H))
         ax2.plot(bins[:-1], 1 - probabilities, linewidth=1, color="r", label='Decoy probability', ls='--')
         target_probabilities = (T.cumsum() - H.cumsum()) / float(sum(T) - sum(H))
+        pep = (1 - probabilities) / (1 - probabilities + target_probabilities)
         ax2.plot(bins[:-1], target_probabilities, linewidth=1, color="b", label='Target probability', ls='--')
+        ax2.plot(bins[:-1], pep, linewidth=1, color="g", label='PEP', ls='--')
         ax2.set_ylim((0, 1.1))
         if log_yscale:
             ax.yscale('log')
@@ -1556,7 +1562,9 @@ class MhcValidator:
         probabilities = H.cumsum() / float(sum(H))
         ax2.plot(bins[:-1], 1 - probabilities, linewidth=1, color="r", label='Decoy probability', ls='--')
         target_probabilities = (T.cumsum() - H.cumsum()) / float(sum(T) - sum(H))
+        pep = (1 - probabilities) / (1 - probabilities + target_probabilities)
         ax2.plot(bins[:-1], target_probabilities, linewidth=1, color="b", label='Target probability', ls='--')
+        ax2.plot(bins[:-1], pep, linewidth=1, color="g", label='PEP', ls='--')
         ax2.set_ylim((0, 1.1))
         if log_yscale:
             ax.yscale('log')
