@@ -1,3 +1,5 @@
+import os
+
 import pandas as pd
 import numpy as np
 from numpy.random import RandomState
@@ -45,10 +47,13 @@ DEFAULT_TEMP_MODEL_DIR = str(Path(tempfile.gettempdir()) / 'validator_models')
 
 
 class MhcValidator:
-    def __init__(self, random_seed: int = 0, model_dir: Union[str, PathLike] = DEFAULT_TEMP_MODEL_DIR):
+    def __init__(self,
+                 random_seed: int = 0,
+                 model_dir: Union[str, PathLike] = DEFAULT_TEMP_MODEL_DIR,
+                 max_threads: int = -1):
         self.filename: str = None
         self.filepath: Path = None
-        self.model = None
+        self.model: keras.Model = None
         self.raw_data: Union[pd.DataFrame, None] = None
         self.feature_matrix: Union[pd.DataFrame, None] = None
         self.labels: Union[List[int], None] = None
@@ -81,7 +86,7 @@ class MhcValidator:
         self.validation_predictions = None
         self.qs = None
         self.roc = None
-        self.prior_qs = None
+        self.percolator_qs = None
         self.mhc_class: str = None
         self.alleles: List[str] = None
         self.min_len: int = 5
@@ -89,6 +94,11 @@ class MhcValidator:
         self.model_dir = Path(model_dir)
         self._mhcflurry_predictions: bool = False
         self._netmhcpan_predictions: bool = False
+        if max_threads < 1:
+            self.max_threads: int = os.cpu_count()
+        else:
+            self.max_threads: int = max_threads
+
 
     def set_mhc_params(self,
                        alleles: Union[str, List[str]] = ('HLA-A0201', 'HLA-B0702', 'HLA-C0702'),
@@ -263,7 +273,7 @@ class MhcValidator:
         pin_data.drop(columns=['Label'], inplace=True)
 
         self.raw_data = pin_data.join(pout_data.set_index('PSMId'), on='SpecId')
-        self.prior_qs = self.raw_data['q-value'].to_numpy(np.float32)
+        self.percolator_qs = self.raw_data['q-value'].to_numpy(np.float32)
         self.raw_data.drop(columns=['q-value'], inplace=True)
 
         self.labels = self.raw_data['Label'].to_numpy(np.float32)
@@ -286,9 +296,11 @@ class MhcValidator:
     def prepare_data(self, validation_split: float = 0.33, holdout_split: float = 0.33, random_seed: int = None,
                      stratification_dimensions: int = 2,
                      subset_by_feature_qvalue: bool = False,
-                     subset_by_mhc_prediction_only: bool = True,
+                     subset_by_mhc_features_only: bool = False,
+                     subset_by_prior_qvalues: bool = False,
                      qvalue_cutoff: float = 0.05,
-                     n_features_to_meet_cutoff: int = 1):
+                     n_features_to_meet_cutoff: int = 1,
+                     verbosity: int = 0):
         """
         Encode peptide sequences and split examples into training, validation, and testing sets. Optionally, ensure
         there are no common peptides sequences between the sets (this might result in imbalanced sets). Note that the
@@ -343,11 +355,30 @@ class MhcValidator:
         self.X_encoded_peps = encoded_peps
 
         if subset_by_feature_qvalue:
-            mask = self.get_qvalue_mask(X, y, qvalue_cutoff, n_features_to_meet_cutoff, subset_by_mhc_prediction_only)
-            X = X[mask]
-            y = y[mask]
-            encoded_peps = encoded_peps[mask]
-            peptides = peptides[mask]
+            mask = self.get_qvalue_mask_from_features(X,
+                                                      y,
+                                                      qvalue_cutoff,
+                                                      n_features_to_meet_cutoff,
+                                                      subset_by_mhc_features_only,
+                                                      verbosity=verbosity)
+        elif subset_by_prior_qvalues:
+            mask = (self.qs <= qvalue_cutoff) | (self.labels == 0)
+        elif subset_by_prior_qvalues and subset_by_feature_qvalue:
+            mask1 = self.get_qvalue_mask_from_features(X,
+                                                      y,
+                                                      qvalue_cutoff,
+                                                      n_features_to_meet_cutoff,
+                                                      subset_by_mhc_features_only,
+                                                      verbosity=verbosity)
+            mask2 = (self.qs <= qvalue_cutoff) | (self.labels == 0)
+            mask = mask1 & mask2
+        else:
+            mask = np.full_like(y, fill_value=True, dtype=bool)
+
+        X = X[mask]
+        y = y[mask]
+        encoded_peps = encoded_peps[mask]
+        peptides = peptides[mask]
 
         if stratification_dimensions == 1:
             stratification = y
@@ -584,7 +615,13 @@ class MhcValidator:
             print(f'Unable to run MhcFlurry.'
                   f'{" See exception information above." if verbose_errors else ""}')
 
-    def get_qvalue_mask(self, X, y, cutoff: float = 0.05, n: int = 1, mhc_only: bool = True):
+    def get_qvalue_mask_from_features(self,
+                                      X,
+                                      y,
+                                      cutoff: float = 0.05,
+                                      n: int = 1,
+                                      mhc_only: bool = True,
+                                      verbosity: int = 1):
         assert X.shape[0] == y.shape[0]
         if mhc_only and not (self._mhcflurry_predictions | self._netmhcpan_predictions):
             raise RuntimeError("mhc_only has been specified for creating a qvalue mask, but MHC predictions have not "
@@ -592,6 +629,8 @@ class MhcValidator:
         columns = list(self.feature_matrix.columns)
         col_idx = [columns.index(x) for x in columns]
         passes = np.zeros(X.shape)
+        if verbosity == 1:
+            print('Calculating masks based on feature q-values.')
         for i in col_idx:
             col = columns[i].lower()
             if len(np.unique(X[:, i])) < 100:  # the data is too quantized
@@ -601,14 +640,17 @@ class MhcValidator:
             if mhc_only:
                 if not ('netmhcpan' in col or 'mhcflurry' in col or 'mhcnuggets' in col or 'netmhciipan' in col):
                     continue
-            print(f'Calculating q-values: {columns[i]}')
+            if verbosity > 1:
+                print(f'Calculating q-values: {columns[i]}')
             higher_better = np.median(X[y == 1, i]) > np.median(X[y == 0, i])
             qs = calculate_qs(X[:, i], y, higher_better)
             passes[:, i] = (y == 1) & (qs <= cutoff)
             passes[y == 0, i] = True  # keep all the decoys in there
-            print(f'  Target PSMs at {cutoff} FDR: {np.sum((y == 1) & (qs <= cutoff))}')
+            if verbosity > 1:
+                print(f'  Target PSMs at {cutoff} FDR: {np.sum((y == 1) & (qs <= cutoff))}')
         mask = np.sum(passes, axis=1) >= n
-        print(f'Total target PSMs with {n} or more features passing {cutoff} q-value cutoff: {np.sum((mask) & (y == 1))}')
+        if verbosity > 1:
+            print(f'Total target PSMs with {n} or more features passing {cutoff} q-value cutoff: {np.sum((mask) & (y == 1))}')
         return mask
 
     def _set_seed(self, random_seed: int = None):
@@ -629,7 +671,7 @@ class MhcValidator:
                           dropout: float = 0.5,
                           learning_rate: float = 0.001,
                           early_stopping_patience: int = 15,
-                          loss_fn=tf.losses.BinaryCrossentropy()) -> [str, List[int]]:
+                          loss_fn=tf.losses.BinaryCrossentropy()) -> [keras.Model, str, List[int]]:
         get_model_function = self._get_model_func(encode_peptide_sequences)
 
         # CREATE CALLBACKS
@@ -647,14 +689,14 @@ class MhcValidator:
             encoded_pep_length = self.max_len
         else:
             encoded_pep_length = 2 * self.max_len
-        self.model = get_model_function(self.feature_matrix.shape[1],
-                                        dropout=dropout,
-                                        hidden_layers=hidden_layers,
-                                        max_pep_length=encoded_pep_length)
-        self.model.compile(loss=loss_fn,
-                           optimizer=optimizer,
-                           metrics=[global_accuracy])
-        return model_name, callbacks_list
+        model = get_model_function(self.feature_matrix.shape[1],
+                                   dropout=dropout,
+                                   hidden_layers=hidden_layers,
+                                   max_pep_length=encoded_pep_length)
+        model.compile(loss=loss_fn,
+                      optimizer=optimizer,
+                      metrics=[global_accuracy])
+        return model, model_name, callbacks_list
 
     def run(self,
             encode_peptide_sequences: bool = False,
@@ -813,7 +855,8 @@ class MhcValidator:
                                                holdout_split: float = 0.25,
                                                validation_split: float = 0.25,
                                                initial_learning_rate: float = 0.001,
-                                               second_fit_learning_rate: float = 0.0001,
+                                               subsequent_iterations_learning_rate: float = 0.0001,
+                                               iterations: int = 1,
                                                early_stopping_patience: int = 15,
                                                dropout: float = 0.5,
                                                hidden_layers: int = 3,
@@ -830,7 +873,7 @@ class MhcValidator:
                                                random_seed: int = None,
                                                return_model: bool = False,
                                                fit_verbosity: int = 2,
-                                               report_vebosity: int = 1,
+                                               report_vebosity: int = 2,
                                                clear_session: bool = True,
                                                initial_model_weights: str = None,
                                                keep_best_loss: bool = True,
@@ -847,7 +890,7 @@ class MhcValidator:
                           random_seed=random_seed,
                           stratification_dimensions=2 if stratify_based_on_MHC_presentation else 1,
                           subset_by_feature_qvalue=subset_by_feature_qvalue,
-                          subset_by_mhc_prediction_only=subset_by_mhc_prediction_only,
+                          subset_by_mhc_features_only=subset_by_mhc_prediction_only,
                           n_features_to_meet_cutoff=n_features_to_meet_cutoff,
                           qvalue_cutoff=qvalue_cutoff)
 
@@ -893,12 +936,8 @@ class MhcValidator:
         self.training_predictions = self.model.predict(X_train).flatten()
         self.testing_predictions = self.model.predict(X_test).flatten()
         self.validation_predictions = self.model.predict(X_val).flatten()
-        if report_vebosity > 0:
-            print('Calculating PSM-level q-values')
         self.qs = calculate_qs(self.predictions, self.y, higher_better=True)
         self.qs = np.asarray(self.qs, dtype=float)
-        if report_vebosity > 0:
-            print('Calculating peptide-level q-values')
         self.roc = calculate_roc(self.qs, self.labels)
         n_targets = np.sum(self.labels == 1)
         n_decoys = np.sum(self.labels == 0)
@@ -937,7 +976,7 @@ class MhcValidator:
                  f'\n' \
                  f'Best model: {model_name}'
 
-        if report_vebosity > 0:
+        if report_vebosity == 2:
             print(report)
         self.raw_data['mhcv_prob'] = list(self.predictions)
         self.raw_data['mhcv_q-value'] = list(self.qs)
@@ -961,6 +1000,7 @@ class MhcValidator:
                                     log_xscale=log_xscale,
                                     log_yscale=log_yscale,
                                     plot_accuracy=plot_accuracy)
+
         if report_dir is not None:
             with open(Path(report_dir, 'training_report.txt'), 'w') as f:
                 f.write(report)
@@ -968,6 +1008,218 @@ class MhcValidator:
             return model_name
 
         #self.run(initial_model_weights=model_name, learning_rate=second_fit_learning_rate)
+
+    def new_run(self,
+                encode_peptide_sequences: bool = False,
+                epochs: int = 30,
+                batch_size: int = 256,
+                loss_fn=tf.losses.BinaryCrossentropy(),
+                holdout_split: float = 0.25,
+                validation_split: float = 0.25,
+                initial_learning_rate: float = 0.001,
+                subsequent_iterations_learning_rate: float = 0.0001,
+                iterations: int = 1,
+                target_fdr: float = 0.01,
+                early_stopping_patience: int = 15,
+                dropout: float = 0.5,
+                hidden_layers: int = 3,
+                subset_by_feature_qvalue: bool = False,
+                subset_by_mhc_prediction_only: bool = False,
+                subset_by_prior_qvalues: bool = False,
+                n_features_to_meet_cutoff: int = 1,
+                qvalue_cutoff: float = 0.1,
+                stratify_based_on_MHC_presentation: bool = False,
+                weight_by_inverse_peptide_counts: bool = True,
+                visualize: bool = True,
+                log_yscale: bool = False,
+                log_xscale: bool = True,
+                report_dir: Union[str, PathLike] = None,
+                random_seed: int = None,
+                return_model: bool = False,
+                fit_verbosity: int = 2,
+                verbosity: int = 2,
+                clear_session: bool = True,
+                model_to_load: str = None,
+                keep_best_loss: bool = True,
+                plot_accuracy: bool = False,
+                weight_on_decoys: float = 1,
+                weight_on_targets: float = 1):
+
+        if clear_session:
+            K.clear_session()
+
+        self._set_seed(random_seed)
+        random_seed = self.random_seed
+
+        # prepare data for training
+        self.prepare_data(validation_split=validation_split,
+                          holdout_split=holdout_split,
+                          random_seed=random_seed,
+                          stratification_dimensions=2 if stratify_based_on_MHC_presentation else 1,
+                          subset_by_feature_qvalue=subset_by_feature_qvalue,
+                          subset_by_mhc_features_only=subset_by_mhc_prediction_only,
+                          subset_by_prior_qvalues=subset_by_prior_qvalues,
+                          n_features_to_meet_cutoff=n_features_to_meet_cutoff,
+                          qvalue_cutoff=qvalue_cutoff,
+                          verbosity=verbosity)
+
+        self.model, model_name, callbacks_list = self._initialize_model(encode_peptide_sequences,
+                                                                        hidden_layers,
+                                                                        dropout,
+                                                                        initial_learning_rate,
+                                                                        early_stopping_patience,
+                                                                        loss_fn)
+
+        if model_to_load is not None:
+            self.model.load_weights(model_to_load)
+        # if we are encoding peptide sequences, add them to the input
+        if encode_peptide_sequences:
+            X_train = [self.X_train, self.X_train_encoded_peps]
+            X_val = [self.X_val, self.X_val_encoded_peps]
+            X_test = [self.X_test, self.X_test_encoded_peps]
+            X = [self.X, self.X_encoded_peps]
+        else:
+            X_train = self.X_train
+            X_val = self.X_val
+            X_test = self.X_test
+            X = self.X
+
+        #
+        peptide_counts = Counter(self.X_train_peps)
+        if weight_by_inverse_peptide_counts:
+            weights = np.array([1 / np.sqrt(peptide_counts[x]) for x in self.X_train_peps])
+        else:
+            weights = np.ones_like(self.y_train)
+        print('Fitting model')
+        self.fit_history = self.model.fit(X_train,
+                                          self.y_train,
+                                          validation_data=(X_val, self.y_val),
+                                          sample_weight=weights,
+                                          epochs=epochs,
+                                          batch_size=batch_size,
+                                          verbose=fit_verbosity,
+                                          callbacks=callbacks_list,
+                                          class_weight={0: weight_on_decoys, 1: weight_on_targets},
+                                          use_multiprocessing=self.max_threads > 1,
+                                          workers=self.max_threads)
+
+        # load the best model
+        if keep_best_loss:
+            self.model.load_weights(model_name)
+
+        self.predictions = self.model.predict(X).flatten()
+        self.training_predictions = self.model.predict(X_train).flatten()
+        self.testing_predictions = self.model.predict(X_test).flatten()
+        self.validation_predictions = self.model.predict(X_val).flatten()
+        self.qs = calculate_qs(self.predictions, self.y, higher_better=True)
+        self.qs = np.asarray(self.qs, dtype=float)
+        self.roc = calculate_roc(self.qs, self.labels)
+        n_targets = np.sum(self.labels == 1)
+        n_decoys = np.sum(self.labels == 0)
+
+        min_val_loss = np.min(self.fit_history.history['val_loss'])
+        stopping_idx = self.fit_history.history['val_loss'].index(min_val_loss) if keep_best_loss else \
+            len(self.fit_history.history['val_loss']) - 1
+        pep_qs, pep_xs, pep_ys, peps = calculate_peptide_level_qs(self.predictions, self.y, self.peptides,
+                                                                  higher_better=True)
+        psm_target_mask = (self.qs <= target_fdr) & (self.y == 1)
+        n_psm_targets = np.sum(psm_target_mask)
+        n_unique_psms = len(np.unique(self.peptides[psm_target_mask]))
+        n_unique_peps = np.sum((pep_qs <= target_fdr) & (pep_ys == 1))
+        evaluate = self.model.evaluate(X_test, self.y_test, batch_size=batch_size, verbose=0)
+
+        report = '\n========== REPORT ==========\n\n' \
+                 f'Total PSMs: {len(self.labels)}\n' \
+                 f'Labeled as targets: {n_targets}\n' \
+                 f'Labeled as decoys: {n_decoys}\n' \
+                 f'Global FDR: {round(n_decoys / n_targets, 3)}\n' \
+                 f'Theoretical number of possible true positives (PSMs): {n_targets - n_decoys}\n' \
+                 f'Theoretical maximum global accuracy: {round((n_decoys + (n_targets - n_decoys)) / len(self.labels), 3)}\n' \
+                 f'  --Be wary if the accuracies below are higher than this value.\n' \
+                 '----- CONFIDENT PSMS AND PEPTIDES -----\n' \
+                 f'Target PSMs at 1% FDR: {n_psm_targets}\n' \
+                 f'Unique peptides at {target_fdr * 100}% PSM-level FDR: {n_unique_psms}\n' \
+                 f'Unique peptides at {target_fdr * 100}% peptide-level FDR: {n_unique_peps}\n' \
+                 f'\n' \
+                 f'----- MODEL TRAINING, VALIDATION, TESTING -----\n' \
+                 f'Training loss: {round(self.fit_history.history["loss"][stopping_idx], 3)} - ' \
+                 f'Validation loss: {round(self.fit_history.history["val_loss"][stopping_idx], 3)} - ' \
+                 f'Testing loss: {round(evaluate[0], 3)}\n' \
+                 f'Training accuracy: {round(self.fit_history.history["global_accuracy"][stopping_idx], 3)} - ' \
+                 f'Validation accuracy: {round(self.fit_history.history["val_global_accuracy"][stopping_idx], 3)} - ' \
+                 f'Testing accuracy: {round(evaluate[1], 3)}\n' \
+                 f'\n' \
+                 f'Best model: {model_name}'
+
+        if verbosity == 2:
+            print(report)
+        elif verbosity == 1:
+            print(f'Targets validated at {target_fdr * 100}% FDR: {n_psm_targets} PSMs '
+                  f'- {n_unique_psms} peptides (PSM level) '
+                  f'- {n_unique_peps} peptides (peptide level)')
+        self.raw_data['mhcv_prob'] = list(self.predictions)
+        self.raw_data['mhcv_q-value'] = list(self.qs)
+        self.raw_data['mhcv_label'] = list(self.labels)
+        self.raw_data['mhcv_peptide'] = list(self.peptides)
+        if visualize and report_dir is not None:
+            self.visualize_training(outdir=report_dir,
+                                    stopping_idx=stopping_idx,
+                                    log_xscale=log_xscale,
+                                    log_yscale=log_yscale,
+                                    plot_accuracy=plot_accuracy)
+        elif not visualize and report_dir is not None:
+            self.visualize_training(outdir=report_dir,
+                                    save_only=True,
+                                    stopping_idx=stopping_idx,
+                                    log_xscale=log_xscale,
+                                    log_yscale=log_yscale,
+                                    plot_accuracy=plot_accuracy)
+        elif visualize:
+            self.visualize_training(stopping_idx=stopping_idx,
+                                    log_xscale=log_xscale,
+                                    log_yscale=log_yscale,
+                                    plot_accuracy=plot_accuracy)
+
+        for i in range(iterations - 1):
+            self.new_run(encode_peptide_sequences=encode_peptide_sequences,
+                         epochs=epochs,
+                         batch_size=batch_size,
+                         loss_fn=loss_fn,
+                         holdout_split=holdout_split,
+                         validation_split=validation_split,
+                         initial_learning_rate=subsequent_iterations_learning_rate,
+                         iterations=1,
+                         target_fdr=target_fdr,
+                         early_stopping_patience=early_stopping_patience,
+                         dropout=dropout,
+                         hidden_layers=hidden_layers,
+                         subset_by_feature_qvalue=subset_by_feature_qvalue,
+                         subset_by_mhc_prediction_only=subset_by_mhc_prediction_only,
+                         n_features_to_meet_cutoff=n_features_to_meet_cutoff,
+                         subset_by_prior_qvalues=True,
+                         qvalue_cutoff=qvalue_cutoff,
+                         stratify_based_on_MHC_presentation=stratify_based_on_MHC_presentation,
+                         weight_by_inverse_peptide_counts=weight_by_inverse_peptide_counts,
+                         visualize=visualize,
+                         log_yscale=log_yscale,
+                         log_xscale=log_xscale,
+                         report_dir=report_dir,
+                         random_seed=random_seed+i,
+                         return_model=return_model,
+                         fit_verbosity=fit_verbosity,
+                         verbosity=verbosity,
+                         clear_session=clear_session,
+                         model_to_load=model_name,
+                         keep_best_loss=keep_best_loss,
+                         plot_accuracy=plot_accuracy)
+
+        if report_dir is not None:
+            with open(Path(report_dir, 'training_report.txt'), 'w') as f:
+                f.write(report)
+        if return_model:
+            return model_name
+
+        # self.run(initial_model_weights=model_name, learning_rate=second_fit_learning_rate)
 
     def test_alt_fit(self,
                      encode_peptide_sequences: bool = False,
@@ -1417,6 +1669,53 @@ class MhcValidator:
             if not Path(outdir).exists():
                 Path(outdir).mkdir(parents=True)
 
+        def plot_histogram(predictions, labels, title, log_xscale, log_yscale):
+            predictions = np.log10(predictions) if log_xscale else predictions
+            fig, ax = plt.subplots()
+            D, bins, _ = ax.hist(x=np.array(predictions[labels == 0]).flatten(), label='Decoy', bins=100, alpha=0.6,
+                                 zorder=999)
+            T, bins, _ = ax.hist(x=np.array(predictions[labels == 1]).flatten(), label='Target', bins=100, alpha=0.6,
+                                 range=(bins[0], bins[-1]))
+            plt.title(title)
+            #ax2 = ax.twinx()
+            #decoy_cum_probabilities = D.cumsum() / (float(sum(D)) + float(sum(T)))
+            #target_cum_probabilities = T.cumsum() / (float(sum(D)) + float(sum(T)))
+            #ax2.plot(bins[:-1], decoy_cum_probabilities, linewidth=1, color="r", label='Decoy probability', ls='--')
+            #tp_cum_probabilities = target_cum_probabilities - decoy_cum_probabilities
+            #pep = decoy_cum_probabilities / (decoy_cum_probabilities + tp_cum_probabilities)
+            #ax2.plot(bins[:-1], target_cum_probabilities, linewidth=1, color="b", label='Target probability', ls='--')
+            #ax2.plot(bins[:-1], pep, linewidth=1, color="g", label='PEP', ls='--')
+            #ax2.set_ylim((0, 1.1))
+            if log_yscale:
+                ax.set_yscale('log')
+            ax.legend()
+            #ax2.legend()
+            ax.set_xlabel("log10(target probability)") if log_xscale else ax.set_xlabel("target probability")
+            ax.set_ylabel("PSM count")
+            if outdir is not None:
+                plt.savefig(str(Path(outdir, f'{title.replace(" ", "_")}.svg')))
+            if not save_only:
+                plt.show()
+            plt.clf()
+
+        plot_histogram(self.training_predictions, self.y_train, 'Predictions for training data', log_xscale, log_yscale)
+        plot_histogram(self.validation_predictions, self.y_val, 'Predictions for validation data', log_xscale, log_yscale)
+        plot_histogram(self.testing_predictions, self.y_test, 'Predictions for testing data', log_xscale, log_yscale)
+        plot_histogram(self.predictions, self.y, 'Predictions for all data', log_xscale, log_yscale)
+
+        qs = self.roc[0][self.roc[0] <= 0.05]
+        response = self.roc[1][self.roc[0] <= 0.05]
+        plt.plot(qs, response, ls='none', marker='.', ms=1)
+        plt.xlim((0, 0.05))
+        plt.xlabel('FDR')
+        plt.ylabel('Number of PSMs')
+        plt.title('ROC')
+        if outdir is not None:
+            plt.savefig(str(Path(outdir, 'ROC.svg')))
+        if not save_only:
+            plt.show()
+        plt.clf()
+
         n_targets = np.sum(self.labels == 1)
         n_decoys = np.sum(self.labels == 0)
         max_accuracy = round((n_decoys + (n_targets - n_decoys)) / len(self.labels), 3)
@@ -1438,7 +1737,8 @@ class MhcValidator:
         ax.set_ylabel('Loss')
         if plot_accuracy:
             ax2 = ax.twinx()
-            ta = ax2.plot(xs, self.fit_history.history['global_accuracy'], c='#3987bc', label='Training accuracy', ls='--')
+            ta = ax2.plot(xs, self.fit_history.history['global_accuracy'], c='#3987bc', label='Training accuracy',
+                          ls='--')
             va = ax2.plot(xs, self.fit_history.history['val_global_accuracy'], c='#ff851a', label='Validation accuracy',
                           ls='--')
             ax2.set_ylabel('Global accuracy (targets and decoys)')
@@ -1471,125 +1771,6 @@ class MhcValidator:
             plt.show()
         plt.clf()
 
-        train_predictions = np.log10(self.training_predictions) if log_xscale else self.training_predictions
-        fig, ax = plt.subplots()
-        H, bins, _ = ax.hist(x=np.array(train_predictions[self.y_train == 0]).flatten(),
-                              label='Decoy', bins=100, alpha=0.6, zorder=999)
-        T, bins, _ = ax.hist(x=np.array(train_predictions[self.y_train == 1]).flatten(),
-                 label='Target', bins=100, alpha=0.6, range=(bins[0], bins[-1]))
-        plt.title('Training data')
-        ax2 = ax.twinx()
-        probabilities = H.cumsum() / float(sum(H))
-        ax2.plot(bins[:-1], 1 - probabilities, linewidth=1, color="r", label='Decoy probability', ls='--')
-        target_probabilities = (T.cumsum() - H.cumsum()) / float(sum(T) - sum(H))
-        pep = (1 - probabilities) / (1 - probabilities + target_probabilities)
-        ax2.plot(bins[:-1], target_probabilities, linewidth=1, color="b", label='Target probability', ls='--')
-        ax2.plot(bins[:-1], pep, linewidth=1, color="g", label='PEP', ls='--')
-        ax2.set_ylim((0, 1.1))
-        if log_yscale:
-            plt.yscale('log')
-        ax.legend()
-        ax2.legend()
-        ax.set_xlabel("log10(target probability)") if log_xscale else ax.xlabel("target probability")
-        ax.set_ylabel("PSM count")
-        if outdir is not None:
-            plt.savefig(str(Path(outdir, 'training_distribution.svg')))
-        if not save_only:
-            plt.show()
-        plt.clf()
-
-        val_predictions = np.log10(self.validation_predictions) if log_xscale else self.validation_predictions
-        fig, ax = plt.subplots()
-        H, bins, _ = ax.hist(x=np.array(val_predictions[self.y_val == 0]).flatten(),
-                              label='Decoy', bins=100, alpha=0.6, zorder=999)
-        T, bins, _ = ax.hist(x=np.array(val_predictions[self.y_val == 1]).flatten(),
-                 label='Target', bins=100, alpha=0.6, range=(bins[0], bins[-1]))
-        plt.title('Validation data')
-        ax2 = ax.twinx()
-        probabilities = H.cumsum() / float(sum(H))
-        ax2.plot(bins[:-1], 1 - probabilities, linewidth=1, color="r", label='Decoy probability', ls='--')
-        target_probabilities = (T.cumsum() - H.cumsum()) / float(sum(T) - sum(H))
-        pep = (1 - probabilities) / (1 - probabilities + target_probabilities)
-        ax2.plot(bins[:-1], target_probabilities, linewidth=1, color="b", label='Target probability', ls='--')
-        ax2.plot(bins[:-1], pep, linewidth=1, color="g", label='PEP', ls='--')
-        ax2.set_ylim((0, 1.1))
-        if log_yscale:
-            ax.yscale('log')
-        ax.legend()
-        ax2.legend()
-        ax.set_xlabel("log10(target probability)") if log_xscale else ax.xlabel("target probability")
-        ax.set_ylabel("PSM count")
-        if outdir is not None:
-            plt.savefig(str(Path(outdir, 'validation_distribution.svg')))
-        if not save_only:
-            plt.show()
-        plt.clf()
-
-        test_predictions = np.log10(self.testing_predictions) if log_xscale else self.testing_predictions
-        fig, ax = plt.subplots()
-        H, bins, _ = ax.hist(x=np.array(test_predictions[self.y_test == 0]).flatten(),
-                              label='Decoy', bins=100, alpha=0.6, zorder=999)
-        T, bins, _ = ax.hist(x=np.array(test_predictions[self.y_test == 1]).flatten(),
-                 label='Target', bins=100, alpha=0.6, range=(bins[0], bins[-1]))
-        plt.title('Testing data')
-        ax2 = ax.twinx()
-        probabilities = H.cumsum() / float(sum(H))
-        ax2.plot(bins[:-1], 1 - probabilities, linewidth=1, color="r", label='Decoy probability', ls='--')
-        target_probabilities = (T.cumsum() - H.cumsum()) / float(sum(T) - sum(H))
-        pep = (1 - probabilities) / (1 - probabilities + target_probabilities)
-        ax2.plot(bins[:-1], target_probabilities, linewidth=1, color="b", label='Target probability', ls='--')
-        ax2.plot(bins[:-1], pep, linewidth=1, color="g", label='PEP', ls='--')
-        ax2.set_ylim((0, 1.1))
-        if log_yscale:
-            ax.yscale('log')
-        ax.legend()
-        ax2.legend()
-        ax.set_xlabel("log10(target probability)") if log_xscale else ax.xlabel("target probability")
-        ax.set_ylabel("PSM count")
-        if outdir is not None:
-            plt.savefig(str(Path(outdir, 'testing_distribution.svg')))
-        if not save_only:
-            plt.show()
-        plt.clf()
-
-        predictions = np.log10(self.predictions) if log_xscale else self.predictions
-        fig, ax = plt.subplots()
-        H, bins, _ = ax.hist(x=np.array(predictions[self.y == 0]).flatten(), label='Decoy', bins=100, alpha=0.6, zorder=999)
-        T, bins, _ = ax.hist(x=np.array(predictions[self.y == 1]).flatten(), label='Target', bins=100, alpha=0.6,
-                 range=(bins[0], bins[-1]))
-        plt.title('All data')
-        ax2 = ax.twinx()
-        probabilities = H.cumsum() / float(sum(H))
-        ax2.plot(bins[:-1], 1 - probabilities, linewidth=1, color="r", label='Decoy probability', ls='--')
-        target_probabilities = (T.cumsum() - H.cumsum()) / float(sum(T) - sum(H))
-        pep = (1 - probabilities) / (1 - probabilities + target_probabilities)
-        ax2.plot(bins[:-1], target_probabilities, linewidth=1, color="b", label='Target probability', ls='--')
-        ax2.plot(bins[:-1], pep, linewidth=1, color="g", label='PEP', ls='--')
-        ax2.set_ylim((0, 1.1))
-        if log_yscale:
-            ax.yscale('log')
-        ax.legend()
-        ax2.legend()
-        ax.set_xlabel("log10(target probability)") if log_xscale else ax.xlabel("target probability")
-        ax.set_ylabel("PSM count")
-        if outdir is not None:
-            plt.savefig(str(Path(outdir, 'all_data_distribution.svg')))
-        if not save_only:
-            plt.show()
-        plt.clf()
-
-        qs = self.roc[0][self.roc[0] <= 0.05]
-        response = self.roc[1][self.roc[0] <= 0.05]
-        plt.plot(qs, response, ls='none', marker='.', ms=1)
-        plt.xlim((0, 0.05))
-        plt.xlabel('FDR')
-        plt.ylabel('Number of PSMs')
-        plt.title('ROC')
-        if outdir is not None:
-            plt.savefig(str(Path(outdir, 'ROC.svg')))
-        if not save_only:
-            plt.show()
-        plt.clf()
         plt.close('all')
 
     def write_table(self, filename: Union[str, PathLike] = None):
