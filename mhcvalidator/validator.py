@@ -1606,3 +1606,6 @@ class MhcValidator:
         plt.title('ROC')
         plt.xlim((0, q_cutoff))
         plt.show()
+
+    def get_peptide_list(self, fdr: float, label: int = 1):
+        return self.peptides[(self.qs <= fdr) & (self.labels == label)]
