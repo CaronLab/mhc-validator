@@ -46,9 +46,9 @@ def calculate_qs(metrics, labels, higher_better: bool = True):
     return qs
 
 
-def calculate_roc(qs, labels):
+def calculate_roc(qs, labels, qvalue_cutoff: float = 0.05):
     qs = np.array(qs)
-    qs = qs[labels == 1]
+    qs = qs[(labels == 1) & (qs <= qvalue_cutoff)]
     qs = np.sort(qs)
     qs, counts = np.unique(qs, return_counts=True) # Counter(qs)
 
