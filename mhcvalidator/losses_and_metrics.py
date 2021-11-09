@@ -102,3 +102,26 @@ def n_psms_at_1percent_fdr(y_true, y_pred):
 
     return n_decoys/n_targets
 
+
+def loss_coteaching(y_1, y_2, t, forget_rate):
+    # possibly instead of forget_rate, use the predicted number of possible true positives
+    remember_rate = 1 - forget_rate
+    num_remember = int(remember_rate * float(tf.shape(t)[0]))
+
+    loss_1 = tf.losses.binary_crossentropy(t, y_1, axis=1)
+    loss_1_sorted_indices = tf.argsort(loss_1)
+    ind_1_best = loss_1_sorted_indices[:num_remember]
+
+    loss_2 = tf.losses.binary_crossentropy(t, y_2, axis=1)
+    loss_2_sorted_indices = tf.argsort(loss_2)
+    ind_2_best = loss_2_sorted_indices[:num_remember]
+
+    if len(ind_1_best) == 0:
+        ind_1_best = loss_1_sorted_indices
+        ind_2_best = loss_2_sorted_indices
+        num_remember = tf.shape(t)[0]
+
+    loss_1_update = keras.losses.binary_crossentropy(tf.gather(t, indices=ind_2_best), tf.gather(y_1, indices=ind_2_best))
+    loss_2_update = keras.losses.binary_crossentropy(tf.gather(t, indices=ind_1_best), tf.gather(y_2, indices=ind_1_best))
+
+    return K.sum(loss_1_update)/num_remember, K.sum(loss_2_update)/num_remember
