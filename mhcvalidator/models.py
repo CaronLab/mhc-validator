@@ -38,14 +38,35 @@ def peptide_sequence_encoding():
     p = layers.Flatten()(p)
     p = layers.Dropout(0.5)(p)
     out = layers.Dense(6)(p)
-
     model = keras.Model(inputs=pep_input, outputs=out)
+    return model
 
 
 def peptide_sequence_label_prediction():
     input = keras.Input(shape=(6,))
-    p = layers.ReLU(input)
-    out = layers.Dense(p, activation=tf.nn.sigmoid)
+    p = K.relu(input)
+    out = layers.Dense(1, activation=tf.nn.sigmoid)(p)
+    model = keras.Model(inputs=input, outputs=out)
+    return model
+
+
+def peptide_sequence_encoder(dropout: float = 0.6, max_pep_length: int = 15):
+    pep_input = keras.Input(shape=(max_pep_length, 21))
+    p = layers.BatchNormalization(input_shape=(max_pep_length, 21))(pep_input)
+    p = layers.Conv1D(18, 4, padding="valid", activation=tf.nn.tanh)(
+        p)  # this should perhaps be 18, not 12. there are up to three anchor sites and 6 alleles
+    p = layers.MaxPool1D()(p)
+    p = layers.Dropout(dropout)(p)
+    p = layers.Flatten()(p)
+    p = layers.Dense(10, activation='relu')(p)
+    p = layers.Dropout(dropout)(p)
+    p = layers.Dense(10, activation='relu')(p)
+    p = layers.Dropout(dropout)(p)
+    p = layers.Dense(6, name='encoded_peptides', activation='relu')(p)
+    p = layers.Dropout(dropout)(p)
+    out = layers.Dense(1, activation=tf.nn.sigmoid)(p)
+    model = keras.Model(inputs=pep_input, outputs=out)
+    return model
 
 
 def get_model_with_peptide_encoding(ms_feature_length: int, max_pep_length: int = 15, dropout: float = 0.6,
