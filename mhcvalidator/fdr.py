@@ -1,9 +1,4 @@
 import numpy as np
-import pandas as pd
-from numba import njit, jit
-from tqdm import tqdm
-from typing import List, Union, Iterable
-from copy import deepcopy
 from collections import Counter
 
 
@@ -44,15 +39,16 @@ def calculate_qs(metrics, labels, higher_better: bool = True):
             N_targets -= target_counts[sorted_metrics[i]]
             N_decoys -= decoy_counts[sorted_metrics[i]]
 
-    if not higher_better:
-        return np.flip(qs)
-    else:
-        return qs
+    #if not higher_better:
+    #    return np.flip(qs)
+    #else:
+    #    return qs
+    return qs
 
 
-def calculate_roc(qs, labels):
+def calculate_roc(qs, labels, qvalue_cutoff: float = 0.05):
     qs = np.array(qs)
-    qs = qs[labels == 1]
+    qs = qs[(labels == 1) & (qs <= qvalue_cutoff)]
     qs = np.sort(qs)
     qs, counts = np.unique(qs, return_counts=True) # Counter(qs)
 
@@ -71,12 +67,12 @@ def calculate_peptide_level_qs(metrics, labels, peptides, higher_better = True):
     n_peps = len(np.unique(peptides))
     best_x = np.empty(n_peps, dtype=np.double)
     best_y = np.empty(n_peps, dtype=np.intc)
-    best_peps = np.empty(n_peps, dtype=str)
+    best_peps = np.empty(n_peps, dtype='U15')
 
     ordered_idx = np.argsort(peptides)
     x = np.asarray([metrics[i] for i in ordered_idx], dtype=np.double)
     y = np.asarray([labels[i] for i in ordered_idx], dtype=np.int)
-    peps = np.asarray([peptides[i] for i in ordered_idx], dtype=str)
+    peps = np.asarray([peptides[i] for i in ordered_idx], dtype='U20')
 
     current_peptide = peps[0]
     current_metric = x[0]
@@ -93,6 +89,11 @@ def calculate_peptide_level_qs(metrics, labels, peptides, higher_better = True):
             else:
                 if x[i] < current_metric:
                     current_metric = x[i]
+            if i == max_i - 1:  # ensure the last entry gets set correctly
+                best_x[pep_idx] = current_metric
+                pre_i = i - 1
+                best_y[pep_idx] = y[pre_i]
+                best_peps[pep_idx] = current_peptide
         else:
             best_x[pep_idx] = current_metric
             pre_i = i - 1
@@ -102,6 +103,12 @@ def calculate_peptide_level_qs(metrics, labels, peptides, higher_better = True):
             pep_idx += 1
             current_peptide = peps[i]
             current_metric = x[i]
+
+            if i == max_i - 1:  # ensure the last entry gets set correctly
+                best_x[pep_idx] = current_metric
+                pre_i = i - 1
+                best_y[pep_idx] = y[pre_i]
+                best_peps[pep_idx] = current_peptide
 
     qs = calculate_qs(metrics=best_x, labels=best_y, higher_better=higher_better)
 

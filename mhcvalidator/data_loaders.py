@@ -7,8 +7,8 @@ import pandas as pd
 import numpy as np
 from pyteomics import pepxml, mzid, tandem
 from os import PathLike
-from Validator.constants import COMMON_AA
-from Validator.peptides import clean_peptide_sequences
+from mhcvalidator.constants import COMMON_AA
+from mhcvalidator.peptides import clean_peptide_sequences
 
 sep_tag = '@@'
 
@@ -286,8 +286,10 @@ def load_pepxml_data(filepath: Union[str, Path],
     after = len(df)
     if after != before:
         print(f"INFO: {before-after} spectra had no identifications and were dropped.")
+    df[prot_column] = df[prot_column].apply(lambda x: '@@'.join(x))
     add_label_feature_from_protein_id(df=df,
-                                      func=extract_label_func,
+                                      func=extract_label_func if extract_label_func is not None
+                                      else lambda x: 0 if x.startswith(decoy_prefix) else 1,
                                       prot_column=prot_column,
                                       decoy_prefix=decoy_prefix)
     return df
@@ -353,7 +355,7 @@ def sequence_contains_only_common_aas(sequence: str):
 
 
 def load_file(filename: Union[str, PathLike],
-              filetype: str = 'auto',
+              filetype: str,
               decoy_tag: str = 'rev_',
               protein_column: str = None,
               tag_is_prefix: bool = True,
@@ -372,21 +374,9 @@ def load_file(filename: Union[str, PathLike],
     :param file_sep:
     :return:
     """
-    if filetype == 'auto':
-        if str(filename).lower().endswith('pin'):
-            filetype = 'pin'
-        elif str(filename).lower().endswith('pepxml'):
-            filetype = 'tandem'
-        elif str(filename).lower().endswith('pep.xml'):
-            filetype = 'pepxml'
-        elif str(filename).lower().endswith('mzid'):
-            filetype = 'mzid'
-        else:
-            raise ValueError('File type could not be inferred from filename. You must explicitly specify the '
-                             'filetype.')
-    else:
-        if filetype not in ['pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine']:
-            raise ValueError("filetype must be one of ['pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine']")
+    if filetype not in ['pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine']:
+        raise ValueError("filetype must be one of "
+                         "{'auto', 'pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine'}")
 
     if filetype == 'pin':
         df = load_pin_data(filename, decoy_tag=decoy_tag, protein_column=protein_column, tag_is_prefix=tag_is_prefix)

@@ -1,12 +1,14 @@
 from setuptools import setup
 
 setup(
-    name='Validator',
+    name='mhcvalidator',
     version='',
-    packages=['Validator'],
+    packages=['mhcvalidator'],
     url='',
     license='',
     author='Kevin Kovalchik',
     author_email='',
-    description=''
+    description='',
+    install_requires=['mhcflurry', 'mhcnames', 'tensorflow', 'scikit-learn', 'pandas', 'numpy', 'tqdm', 'pyteomics',
+                      'matplotlib']
 )
