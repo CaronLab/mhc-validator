@@ -30,6 +30,16 @@ def get_model_with_lstm_peptide_encoding(ms_feature_length: int,
     return model
 
 
+def peptide_sequence_encoding():
+    pep_input = keras.Input(shape=(15, 21))
+    p = layers.BatchNormalization(input_shape=(15, 21))(pep_input)
+    p = layers.Conv1D(12, 4, padding="valid", activation=tf.nn.tanh)(p)
+    p = layers.MaxPool1D()(p)
+    p = layers.Dropout(0.5)(p)
+    p = layers.Flatten()(p)
+    pep_out_flat = layers.Dense(4, activation=tf.nn.relu)(p)
+
+
 def get_model_with_peptide_encoding(ms_feature_length: int, max_pep_length: int = 15, dropout: float = 0.6,
                                     hidden_layers: int = 3):
     pep_input = keras.Input(shape=(max_pep_length, 21))
