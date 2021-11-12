@@ -33,11 +33,19 @@ def get_model_with_lstm_peptide_encoding(ms_feature_length: int,
 def peptide_sequence_encoding():
     pep_input = keras.Input(shape=(15, 21))
     p = layers.BatchNormalization(input_shape=(15, 21))(pep_input)
-    p = layers.Conv1D(12, 4, padding="valid", activation=tf.nn.tanh)(p)
+    p = layers.Conv1D(12, 4, padding="valid", activation=tf.nn.tanh)(p) # this should perhaps be 18, not 12. there are up to three anchor sites and 6 alleles
     p = layers.MaxPool1D()(p)
-    p = layers.Dropout(0.5)(p)
     p = layers.Flatten()(p)
-    pep_out_flat = layers.Dense(4, activation=tf.nn.relu)(p)
+    p = layers.Dropout(0.5)(p)
+    out = layers.Dense(6)(p)
+
+    model = keras.Model(inputs=pep_input, outputs=out)
+
+
+def peptide_sequence_label_prediction():
+    input = keras.Input(shape=(6,))
+    p = layers.ReLU(input)
+    out = layers.Dense(p, activation=tf.nn.sigmoid)
 
 
 def get_model_with_peptide_encoding(ms_feature_length: int, max_pep_length: int = 15, dropout: float = 0.6,

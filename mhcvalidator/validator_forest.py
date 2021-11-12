@@ -17,7 +17,7 @@ from mhcvalidator.losses_and_metrics import i_dunno_bce, global_accuracy, total_
 from mhcvalidator.fdr import calculate_qs, calculate_peptide_level_qs, calculate_roc
 import matplotlib.pyplot as plt
 from mhcflurry.encodable_sequences import EncodableSequences
-from mhcvalidator.models import get_model_without_peptide_encoding, get_model_with_peptide_encoding
+from mhcvalidator.models import get_model_without_peptide_encoding, get_model_with_peptide_encoding, peptide_sequence_encoding, peptide_sequence_label_prediction
 from mhcvalidator.peptides import clean_peptide_sequences
 from mhcnames import normalize_allele_name
 from copy import deepcopy
@@ -1347,6 +1347,30 @@ class MhcValidator:
             return model_name
 
         # self.run(initial_model_weights=model_name, learning_rate=second_fit_learning_rate)
+
+    def train_peptide_encoder(self, epochs, training_dataset, validation_dataset):
+        encoder = peptide_sequence_encoding()
+        label_prediction = peptide_sequence_label_prediction()
+
+        enc_optimizer = keras.optimizers.Adam()
+        label_optimizer = keras.optimizers.Adam()
+
+        train_losses = []
+        val_losses = []
+
+        for epoch in range(epochs):
+            print("\nStart of epoch %d" % (epoch,))
+
+            losses_1 = []
+            losses_2 = []
+
+            # Iterate over the batches of the dataset.
+            for step, (x_batch_train, y_batch_train) in enumerate(training_dataset):
+                with tf.GradientTape(persistent=True) as tape:
+                    x = encoder(x_batch_train)
+                    y_pred = label_prediction(x)
+                    loss = tf.losses.binary_crossentropy(y_batch_train, y_pred, from_logits=False)
+
 
     def coteach(self,
                 encode_peptide_sequences: bool = False,
