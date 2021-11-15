@@ -13,7 +13,7 @@ from mhcvalidator.data_loaders import load_file, load_pout_data
 from mhcvalidator.features import prepare_features, eliminate_common_peptides_between_sets
 from mhcvalidator.predictions_parsers import add_mhcflurry_to_feature_matrix, add_netmhcpan_to_feature_matrix
 from mhcvalidator.netmhcpan_helper import NetMHCpanHelper, format_class_II_allele
-from mhcvalidator.losses_and_metrics import i_dunno_bce, global_accuracy, total_fdr, loss_coteaching
+from mhcvalidator.losses_and_metrics import i_dunno_bce, global_accuracy, pickTopPredictions, sliding_bce
 from mhcvalidator.fdr import calculate_qs, calculate_peptide_level_qs, calculate_roc
 import matplotlib.pyplot as plt
 from mhcflurry.encodable_sequences import EncodableSequences
@@ -866,7 +866,11 @@ class MhcValidator:
         # plt.yscale('log')
 
         roc = calculate_roc(qs, labels, qvalue_cutoff=0.05)
-        roc = calculate_roc(qs, labels, qvalue_cutoff=0.05)
+
+        self.predictions = preds
+        self.qs = qs
+        self.roc = roc
+        self.roc = roc
 
         ax3.plot(roc[0], roc[1], ls='-', lw='0.5', marker='.', c='#1F77B4', alpha=1)
         ax3.axvline(0.01, c='k', ls='--')
@@ -928,17 +932,24 @@ class MhcValidator:
                               epochs=20,
                               validation_split=0.5,
                               batch_size=64,
+                              n_encoded_features=3,
                               learning_rate=0.001,
                               dropout: float = 0.5,
                               random_seed: int = None,
-                              weight_by_peptide_counts: bool = True):
+                              weight_by_peptide_counts: bool = True,
+                              label_smoothing: float = 0.1):
 
         self._set_seed(random_seed)
-        encoder: keras.Model = peptide_sequence_encoder(max_pep_length=self.max_len, dropout=dropout)
+        encoder: keras.Model = peptide_sequence_encoder(max_pep_length=self.max_len,
+                                                        dropout=dropout,
+                                                        encoding_size=n_encoded_features)
+        #top_n_picker = pickTopPredictions(np.sum(self.labels == 1), np.sum(self.labels == 0), epochs)
+        #callbacks = [top_n_picker]
+        #loss_fn = sliding_bce(top_n_picker.top_n)
 
         optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
 
-        loss_fn = tf.losses.BinaryCrossentropy()
+        loss_fn = tf.losses.BinaryCrossentropy(label_smoothing=label_smoothing)
         encoder.compile(loss=loss_fn, optimizer=optimizer)
 
         self.prepare_data(validation_split=validation_split, stratification_dimensions=1)
@@ -1002,10 +1013,12 @@ class MhcValidator:
                               epochs=20,
                               validation_split=0.5,
                               batch_size=64,
+                              n_encoded_features: int = 3,
                               learning_rate=0.001,
                               dropout: float = 0.5,
                               random_seed: int = None,
-                              weight_by_peptide_counts: bool = True):
+                              weight_by_peptide_counts: bool = True,
+                              label_smoothing: float = 0.0):
 
         encoded_peps = self.train_peptide_encoder(epochs=epochs,
                                                   validation_split=validation_split,
@@ -1013,9 +1026,12 @@ class MhcValidator:
                                                   learning_rate=learning_rate,
                                                   dropout=dropout,
                                                   random_seed=random_seed,
-                                                  weight_by_peptide_counts=weight_by_peptide_counts)
-        df = pd.DataFrame(data=encoded_peps, columns=[f'encoding{x}' for x in range(np.shape(encoded_peps)[1])])
-
+                                                  weight_by_peptide_counts=weight_by_peptide_counts,
+                                                  n_encoded_features=n_encoded_features,
+                                                  label_smoothing=label_smoothing)
+        df = pd.DataFrame(data=encoded_peps, columns=[f'mhcv_seq_encoding{x}' for x in range(np.shape(encoded_peps)[1])])
+        self.feature_matrix.drop(columns=[x for x in self.feature_matrix.columns
+                                          if 'mhcv_seq_encoding' in x], inplace=True)
         self.feature_matrix = self.feature_matrix.join(df)
 
     def filter_library(self,

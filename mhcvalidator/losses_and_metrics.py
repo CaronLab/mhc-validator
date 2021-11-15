@@ -6,6 +6,33 @@ import numpy as np
 from mhcvalidator.fdr import calculate_qs
 
 
+class pickTopPredictions(keras.callbacks.Callback):
+    def __init__(self, n_targets, n_decoys, expected_epochs):
+        super(pickTopPredictions, self).__init__()
+        top_n_schedule = np.linspace(n_targets + n_decoys, n_targets - n_decoys, expected_epochs)
+        self.top_n_schedule = [K.variable(x, dtype=tf.int32) for x in top_n_schedule]
+        self.top_n = K.variable(n_decoys + n_targets, dtype=tf.int32)
+
+    def on_epoch_begin(self, epoch, logs={}):
+        K.set_value(self.top_n, K.get_value(self.top_n_schedule[epoch]))
+        print(f"Using top {self.top_n} PSMs")
+
+
+def sliding_bce(top_n):
+    """
+    Use only the "top_n" scoring PSMs for calculated BCE.
+    :param top_n: the number of PSMs to use. Should reference an instance of pickTopPredictions.top_n
+    :return: Modified binary cross entropy function which only scores the "top_n" examples.
+    """
+    def bce(y_true, y_pred):
+        top_examples = tf.argsort(y_pred, direction='DESCENDING')
+        return keras.losses.binary_crossentropy(
+            tf.gather(y_true, top_examples[:top_n]),
+            tf.gather(y_pred, top_examples[:top_n])
+        )
+    return bce
+
+
 def Chi2Loss(y_true, y_pred):
     h_true = tf.histogram_fixed_width(y_true, value_range=(0, 1.), nbins=20)
     h_pred = tf.histogram_fixed_width(y_pred, value_range=(0, 1.), nbins=20)

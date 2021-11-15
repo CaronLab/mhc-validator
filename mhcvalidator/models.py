@@ -50,7 +50,7 @@ def peptide_sequence_label_prediction():
     return model
 
 
-def peptide_sequence_encoder(dropout: float = 0.6, max_pep_length: int = 15):
+def peptide_sequence_encoder(dropout: float = 0.6, max_pep_length: int = 15, encoding_size: int = 3):
     pep_input = keras.Input(shape=(max_pep_length, 21))
     p = layers.BatchNormalization(input_shape=(max_pep_length, 21))(pep_input)
     p = layers.Conv1D(18, 4, padding="valid", activation=tf.nn.tanh)(
@@ -58,11 +58,11 @@ def peptide_sequence_encoder(dropout: float = 0.6, max_pep_length: int = 15):
     p = layers.MaxPool1D()(p)
     p = layers.Dropout(dropout)(p)
     p = layers.Flatten()(p)
-    p = layers.Dense(10, activation='relu')(p)
+    p = layers.Dense(encoding_size*3, activation='relu')(p)
     p = layers.Dropout(dropout)(p)
-    p = layers.Dense(10, activation='relu')(p)
+    p = layers.Dense(encoding_size*3, activation='relu')(p)
     p = layers.Dropout(dropout)(p)
-    p = layers.Dense(6, name='encoded_peptides', activation='relu')(p)
+    p = layers.Dense(encoding_size, name='encoded_peptides', activation='relu')(p)
     p = layers.Dropout(dropout)(p)
     out = layers.Dense(1, activation=tf.nn.sigmoid)(p)
     model = keras.Model(inputs=pep_input, outputs=out)
