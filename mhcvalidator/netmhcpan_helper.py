@@ -324,5 +324,4 @@ class NetMHCpanHelper:
                              self.predictions[netmhc_pep][allele]['aff_nM'],
                              self.predictions[netmhc_pep][allele]['binder']])
         df = pd.DataFrame(data=data, columns=df_columns)
-        print(df.columns)
         return df

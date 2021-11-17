@@ -46,10 +46,14 @@ def calculate_qs(metrics, labels, higher_better: bool = True):
     return qs
 
 
-def calculate_roc(qs, labels, qvalue_cutoff: float = 0.05):
-    qs = np.array(qs)
+def calculate_roc(qs,
+                  labels,
+                  qvalue_cutoff: float = 0.05):
+    qs = np.array(qs, dtype=float)
+
     qs = qs[(labels == 1) & (qs <= qvalue_cutoff)]
-    qs = np.sort(qs)
+    sort_idx = np.argsort(qs)
+    qs = qs[sort_idx]
     qs, counts = np.unique(qs, return_counts=True) # Counter(qs)
 
     N = 0
@@ -68,6 +72,8 @@ def calculate_peptide_level_qs(metrics, labels, peptides, higher_better = True):
     best_x = np.empty(n_peps, dtype=np.double)
     best_y = np.empty(n_peps, dtype=np.intc)
     best_peps = np.empty(n_peps, dtype='U15')
+
+    peptide_counter = Counter(peptides)
 
     ordered_idx = np.argsort(peptides)
     x = np.asarray([metrics[i] for i in ordered_idx], dtype=np.double)
@@ -112,7 +118,9 @@ def calculate_peptide_level_qs(metrics, labels, peptides, higher_better = True):
 
     qs = calculate_qs(metrics=best_x, labels=best_y, higher_better=higher_better)
 
-    return np.asarray(qs), np.asarray(best_x), np.asarray(best_y), np.asarray(best_peps)
+    peptide_counts = [peptide_counter[p] for p in best_peps]
+
+    return np.asarray(qs), np.asarray(best_x), np.asarray(best_y), np.asarray(best_peps), np.array(peptide_counts)
 
 
 def get_confident_data(X, y, metrics, fdr: float = 0.01, higher_better: bool = True):

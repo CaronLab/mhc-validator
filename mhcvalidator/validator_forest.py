@@ -12,6 +12,7 @@ from pathlib import Path
 from mhcvalidator.data_loaders import load_file, load_pout_data
 from mhcvalidator.features import prepare_features, eliminate_common_peptides_between_sets
 from mhcvalidator.predictions_parsers import add_mhcflurry_to_feature_matrix, add_netmhcpan_to_feature_matrix
+from mhcvalidator.predictions_parsers import format_mhcflurry_predictions_dataframe, format_netmhcpan_prediction_dataframe
 from mhcvalidator.netmhcpan_helper import NetMHCpanHelper, format_class_II_allele
 from mhcvalidator.losses_and_metrics import i_dunno_bce, global_accuracy, pickTopPredictions, sliding_bce
 from mhcvalidator.fdr import calculate_qs, calculate_peptide_level_qs, calculate_roc
@@ -33,6 +34,9 @@ from multiprocessing import Process, Queue
 import tensorflow_decision_forests as tfdf
 from matplotlib.gridspec import GridSpec
 import subprocess
+import matplotlib.backends.backend_pdf as plt_pdf
+from contextlib import nullcontext
+from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
 
 deprecation._PRINT_DEPRECATION_WARNINGS = False
 
@@ -102,6 +106,8 @@ class MhcValidator:
         self.tfdf_session = tf.compat.v1.Session(graph=self.tfdf_graph)
         self._mhcflurry_predictions: bool = False
         self._netmhcpan_predictions: bool = False
+        self.mhcflurry_predictions: pd.DataFrame = None
+        self.netmhcpan_predictions: pd.DataFrame = None
         if max_threads < 1:
             self.max_threads: int = os.cpu_count()
         else:
@@ -519,6 +525,10 @@ class MhcValidator:
 
         preds = pd.read_csv(results_file, index_col=False)
 
+        self.mhcflurry_predictions = format_mhcflurry_predictions_dataframe(preds,
+                                                                            self.peptides,
+                                                                            True)
+
         self.feature_matrix = add_mhcflurry_to_feature_matrix(self.feature_matrix,
                                                               mhcflurry_predictions=preds,
                                                               from_file=True,
@@ -547,6 +557,7 @@ class MhcValidator:
                                     mhc_class=self.mhc_class,
                                     n_threads=n_processes)
         preds = netmhcpan.predict_df()
+        self.netmhcpan_predictions = format_netmhcpan_prediction_dataframe(preds)
         to_drop = [x for x in preds.columns if 'rank' in x.lower()]
         preds.drop(columns=to_drop, inplace=True)
         self.feature_matrix = add_netmhcpan_to_feature_matrix(self.feature_matrix, preds)
@@ -686,6 +697,29 @@ class MhcValidator:
                       metrics=[global_accuracy])
         return model, model_name, callbacks_list
 
+    '''def _calculate_peptides_similarity(self):
+        n_targets = np.sum(self.y == 1)
+        n_decoys = np.sum(self.y == 0)
+
+        encoder = EncodableSequences(list(self.peptides))
+        padding = 'pad_middle' if self.mhc_class == 'I' else 'left_pad_right_pad'
+        encoded_peps = encoder.variable_length_to_fixed_length_vector_encoding('BLOSUM62',
+                                                                               max_length=self.max_len,
+                                                                               alignment_method=padding)
+
+        encoded_decoys = encoded_peps[self.y == 0]
+        encoded_targets = encoded_peps[self.y == 1]
+
+        summed_null_encoding = np.sum(encoded_decoys, axis=0)
+        summed_target_encoding = np.sum(encoded_targets, axis=0)
+
+        desired_target_encoding = (summed_target_encoding - summed_null_encoding) / (n_targets - n_decoys)
+        desired_target_encoding = (desired_target_encoding - np.min(desired_target_encoding)) / (np.max(desired_target_encoding) - np.min(desired_target_encoding))
+        def normalize(x):
+            x = x.flatten()
+            return (x-np.amin(x))/(np.amax(x)-np.amin(x)).flatten().reshape(1, -1)
+        similarity = np.array([euclidean(normalize(x), desired_target_encoding.reshape(1, -1)) for x in tqdm(encoded_peps)])'''
+
     @staticmethod
     def _simple_peptide_encoding(peptide: str):
         odd = len(peptide) % 2
@@ -715,6 +749,7 @@ class MhcValidator:
             weight_by_inverse_peptide_counts: bool = True,
             visualize: bool = True,
             report_dir: Union[str, PathLike] = None,
+            fig_pdf: Union[str, PathLike] = None,
             random_seed: int = None,
             report_vebosity: int = 1,
             clear_session: bool = True,
@@ -775,14 +810,15 @@ class MhcValidator:
         test_qs = calculate_qs(test_preds.flatten(), test_labels)
         train_qs = calculate_qs(train_preds.flatten(), train_labels)
 
+        pdf = plt_pdf.PdfPages(str(fig_pdf), keep_empty=False)
+
         fig = plt.figure(constrained_layout=True, figsize=(10, 10))
         gs = GridSpec(2, 2, figure=fig)
 
         # create sub plots as grid
         ax1 = fig.add_subplot(gs[0, 0])
         ax2 = fig.add_subplot(gs[0, 1])
-        ax3 = fig.add_subplot(gs[1, 0])
-        ax4 = fig.add_subplot(gs[1, 1])
+        ax3 = fig.add_subplot(gs[1, :])
 
         ax1.hist(train_preds[train_labels == 0], label='Decoy', bins=30, alpha=0.5)
         ax1.hist(train_preds[train_labels == 1], label='Target', bins=30, alpha=0.5)
@@ -811,24 +847,27 @@ class MhcValidator:
         ax3.set_ylabel("Number of PSMs")
         ax3.set_ylim((0, ax3.get_ylim()[1]))
 
-        train_roc = calculate_roc(train_qs, train_labels, qvalue_cutoff=0.5)
-        val_roc = calculate_roc(test_qs, test_labels, qvalue_cutoff=0.5)
+        #train_roc = calculate_roc(train_qs, train_labels, qvalue_cutoff=0.5)
+        #val_roc = calculate_roc(test_qs, test_labels, qvalue_cutoff=0.5)
 
-        ax4.plot(train_roc[0], train_roc[1], ls='-', lw='0.5', marker='.', label='Training predictions', c='#1F77B4', alpha=1)
-        ax4.plot(val_roc[0], val_roc[1], ls='-', lw='0.5', marker='.', label='Validation predictions', c='#FF7F0F', alpha=1)
-        ax4.axvline(0.01, c='k', ls='--')
-        ax4.axvline(0.05, c='k', ls='--')
-        ax4.legend()
-        ax4.set_title("Expanded ROC curve")
-        ax4.set_xlabel("FDR")
-        ax4.set_ylabel("Number of PSMs")
-        ax4.set_ylim((0, ax4.get_ylim()[1]))
+        #ax4.plot(train_roc[0], train_roc[1], ls='-', lw='0.5', marker='.', label='Training predictions', c='#1F77B4', alpha=1)
+        #ax4.plot(val_roc[0], val_roc[1], ls='-', lw='0.5', marker='.', label='Validation predictions', c='#FF7F0F', alpha=1)
+        #ax4.axvline(0.01, c='k', ls='--')
+        #ax4.axvline(0.05, c='k', ls='--')
+        #ax4.legend()
+        #ax4.set_title("Expanded ROC curve")
+        #ax4.set_xlabel("FDR")
+        #ax4.set_ylabel("Number of PSMs")
+        #ax4.set_ylim((0, ax4.get_ylim()[1]))
 
         if q_value_subset < 1:
             fig.suptitle("Subset used for training and validation", fontsize=14)
         else:
             fig.suptitle("Training and validation", fontsize=14)
-        fig.show()
+        if visualize:
+            fig.show()
+        if fig_pdf is not None:
+            pdf.savefig(fig)
         plt.close(fig)
 
         ratio = len(train_labels) / len(test_labels)
@@ -870,7 +909,6 @@ class MhcValidator:
         self.predictions = preds
         self.qs = qs
         self.roc = roc
-        self.roc = roc
 
         ax3.plot(roc[0], roc[1], ls='-', lw='0.5', marker='.', c='#1F77B4', alpha=1)
         ax3.axvline(0.01, c='k', ls='--')
@@ -880,31 +918,39 @@ class MhcValidator:
         ax3.set_ylabel("Number of PSMs")
 
         fig.suptitle("Predictions for all data", fontsize=14)
-        fig.show()
+        if visualize:
+            fig.show()
+        if fig_pdf is not None:
+            pdf.savefig(fig)
         plt.close(fig)
 
         logs = self.model.make_inspector().training_logs()
 
-        plt.figure(figsize=(12, 4))
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 
-        plt.subplot(1, 2, 1)
-        plt.plot([log.num_trees for log in logs], [log.evaluation.accuracy for log in logs])
-        plt.xlabel("Number of trees")
-        plt.ylabel("Accuracy (out-of-bag)")
+        ax1.plot([log.num_trees for log in logs], [log.evaluation.accuracy for log in logs])
+        ax1.set_xlabel("Number of trees")
+        ax1.set_ylabel("Accuracy (out-of-bag)")
 
-        plt.subplot(1, 2, 2)
-        plt.plot([log.num_trees for log in logs], [log.evaluation.loss for log in logs])
-        plt.xlabel("Number of trees")
-        plt.ylabel("Logloss (out-of-bag)")
+        ax2.plot([log.num_trees for log in logs], [log.evaluation.loss for log in logs])
+        ax2.set_xlabel("Number of trees")
+        ax2.set_ylabel("Logloss (out-of-bag)")
 
-        plt.show()
+        if visualize:
+            fig.show()
+        if fig_pdf is not None:
+            pdf.savefig(fig)
+        plt.close()
+        pdf.close()
 
         n_targets = np.sum(self.labels == 1)
         n_decoys = np.sum(self.labels == 0)
         psms = self.peptides[(qs <= 0.01) & (self.labels == 1)]
         n_psm_targets = len(psms)
         n_unique_psms = len(set(psms))
-        pep_level_qs, _, pep_level_labels, peps = calculate_peptide_level_qs(preds, self.labels, self.peptides)
+        pep_level_qs, _, pep_level_labels, peps, pep_counts = calculate_peptide_level_qs(preds,
+                                                                                         self.labels,
+                                                                                         self.peptides)
         n_unique_peps = np.sum((pep_level_qs <= 0.01) & (pep_level_labels == 1))
 
 
@@ -921,12 +967,35 @@ class MhcValidator:
 
         if report_vebosity > 0:
             print(report)
-        self.raw_data['mhcv_prob'] = list(preds)
-        self.raw_data['mhcv_q-value'] = list(qs)
-        self.raw_data['mhcv_label'] = list(labels)
+        self.raw_data['mhcv_prob'] = list(self.predictions)
+        self.raw_data['mhcv_q-value'] = list(self.qs)
+        self.raw_data['mhcv_label'] = list(self.labels)
         self.raw_data['mhcv_peptide'] = list(self.peptides)
 
         # self.run(initial_model_weights=model_name, learning_rate=second_fit_learning_rate)
+
+    def add_peptide_clustering(self,
+                               expected_grouping: int = -1,
+                               random_seed: int = None):
+        if expected_grouping == -1:
+            expected_grouping = len(self.alleles) + 1
+        self._set_seed(random_seed)
+        encoder = EncodableSequences(list(self.peptides))
+        padding = 'pad_middle' if self.mhc_class == 'I' else 'left_pad_right_pad'
+        encoded_peps = encoder.variable_length_to_fixed_length_vector_encoding('BLOSUM62',
+                                                                               max_length=self.max_len,
+                                                                               alignment_method=padding)
+        encoded_peps = keras.utils.normalize(encoded_peps, 0)
+        shape = np.shape(encoded_peps)
+        encoded_peps = encoded_peps.reshape((shape[0], shape[1]*shape[2]))
+
+        bgm = GaussianMixture(expected_grouping)
+        bgm.fit(encoded_peps)
+        preds = bgm.predict_proba(encoded_peps)
+
+        df = pd.DataFrame(columns=[f'gmmc@@{x}' for x in range(np.shape(preds)[1])], data=preds)
+        self.feature_matrix.drop(columns=[x for x in self.feature_matrix.columns if 'gmmc@@' in x], inplace=True)
+        self.feature_matrix = self.feature_matrix.join(df)
 
     def train_peptide_encoder(self,
                               epochs=20,
@@ -937,7 +1006,9 @@ class MhcValidator:
                               dropout: float = 0.5,
                               random_seed: int = None,
                               weight_by_peptide_counts: bool = True,
-                              label_smoothing: float = 0.1):
+                              label_smoothing: float = 0.0,
+                              visualize: bool = True,
+                              pdf_out: Union[str, PathLike] = None):
 
         self._set_seed(random_seed)
         encoder: keras.Model = peptide_sequence_encoder(max_pep_length=self.max_len,
@@ -970,10 +1041,16 @@ class MhcValidator:
                                        verbose=2,
                                        sample_weight=weights)
 
+        if pdf_out is not None:
+            pdf = plt_pdf.PdfPages(pdf_out, False)
+
         plt.plot(self.fit_history.history['loss'], label='Training')
         plt.plot(self.fit_history.history['val_loss'], label='Validation')
         plt.legend()
-        plt.show()
+        if visualize:
+            plt.show()
+        if pdf_out is not None:
+            pdf.savefig()
         plt.close()
 
         preds = encoder.predict(self.X_encoded_peps).flatten()
@@ -983,22 +1060,37 @@ class MhcValidator:
         train_qs = calculate_qs(train_preds, self.y_train)
         val_qs = calculate_qs(val_preds, self.y_val)
 
-        self.plot_histogram(train_preds,
+        # These need to optionally not show the plot and save it to a PDF
+        hist1, _ = self.plot_histogram(train_preds,
                             self.y_train,
-                            title='Training predictions')
-        self.plot_histogram(val_preds,
+                            title='Training predictions',
+                            visualize=visualize,
+                            return_fig=True)
+        hist2, _ = self.plot_histogram(val_preds,
                             self.y_val,
-                            title='Validation predictions')
-        self.plot_histogram(preds,
+                            title='Validation predictions',
+                            visualize=visualize,
+                            return_fig=True)
+        hist3, _ = self.plot_histogram(preds,
                             self.y,
-                            title='All predictions')
+                            title='All predictions',
+                            visualize=visualize,
+                            return_fig=True)
 
-        self.plot_roc(calculate_roc(qs, self.labels))
+        roc, _ = self.plot_roc(calculate_roc(qs, self.labels), visualize=visualize,
+                               return_fig=True)
 
         train_roc = calculate_roc(train_qs, self.y_train,
                                   qvalue_cutoff=0.05)
         val_roc = calculate_roc(val_qs, self.y_val, qvalue_cutoff=0.05)
-        self.compare_rocs(train_roc, val_roc)
+        rocs, _ = self.compare_rocs(train_roc, val_roc, visualize=visualize,
+                                    return_fig=True)
+
+        if pdf_out is not None:
+            for fig in [hist1, hist2, hist3, roc, rocs]:
+                pdf.savefig(fig)
+            pdf.close()
+        plt.close('all')
 
         print(f"Training target PSMs at 1% FDR: {np.sum((train_qs <= 0.01) & (self.y_train == 1))}")
         print(f"Validation target PSMs at 1% FDR: {np.sum((val_qs <= 0.01) & (self.y_val == 1))}")
@@ -1018,7 +1110,9 @@ class MhcValidator:
                               dropout: float = 0.5,
                               random_seed: int = None,
                               weight_by_peptide_counts: bool = True,
-                              label_smoothing: float = 0.0):
+                              label_smoothing: float = 0.0,
+                              visualize: bool = True,
+                              pdf_out: Union[str, PathLike] = None):
 
         encoded_peps = self.train_peptide_encoder(epochs=epochs,
                                                   validation_split=validation_split,
@@ -1028,7 +1122,9 @@ class MhcValidator:
                                                   random_seed=random_seed,
                                                   weight_by_peptide_counts=weight_by_peptide_counts,
                                                   n_encoded_features=n_encoded_features,
-                                                  label_smoothing=label_smoothing)
+                                                  label_smoothing=label_smoothing,
+                                                  visualize=visualize,
+                                                  pdf_out=pdf_out)
         df = pd.DataFrame(data=encoded_peps, columns=[f'mhcv_seq_encoding{x}' for x in range(np.shape(encoded_peps)[1])])
         self.feature_matrix.drop(columns=[x for x in self.feature_matrix.columns
                                           if 'mhcv_seq_encoding' in x], inplace=True)
@@ -1226,16 +1322,25 @@ class MhcValidator:
                                                 #                         index=False)
 
     @staticmethod
-    def compare_rocs(train_roc, val_roc, title: str = "Comparison of training and validation ROCs"):
+    def compare_rocs(train_roc,
+                     val_roc,
+                     title: str = "Comparison of training and validation ROCs",
+                     visualize: bool = True,
+                     return_fig: bool = True):
 
-        plt.plot(train_roc[0], train_roc[1], ls='-', lw=0.5, marker='.', label='Training predictions', c='#1F77B4')
-        plt.plot(val_roc[0], val_roc[1], ls='-', lw=0.5, marker='.', label='Validation predictions', c='#FF7F0F')
-        plt.legend()
+        fig, ax = plt.subplots()
+        ax.plot(train_roc[0], train_roc[1], ls='-', lw=0.5, marker='.', label='Training predictions', c='#1F77B4')
+        ax.plot(val_roc[0], val_roc[1], ls='-', lw=0.5, marker='.', label='Validation predictions', c='#FF7F0F')
+        ax.legend()
         plt.title(title)
-        plt.xlabel("FDR")
-        plt.ylabel("Number of PSMs")
-        plt.tight_layout()
-        plt.show()
+        ax.set_xlabel("FDR")
+        ax.set_ylabel("Number of PSMs")
+        fig.tight_layout()
+        if visualize:
+            fig.show()
+            return None, None
+        if return_fig:
+            return fig, ax
 
     @staticmethod
     def plot_histogram(predictions,
@@ -1244,7 +1349,8 @@ class MhcValidator:
                        log_xscale: bool = False,
                        log_yscale: bool = False,
                        outdir: Union[str, PathLike] = None,
-                       save_only: bool = False):
+                       visualize: bool = True,
+                       return_fig: bool = False):
         predictions = np.log10(predictions) if log_xscale else predictions
         fig, ax = plt.subplots()
         D, bins, _ = ax.hist(x=np.array(predictions[labels == 0]).flatten(), label='Decoy', bins=100, alpha=0.6,
@@ -1259,29 +1365,39 @@ class MhcValidator:
         ax.set_ylabel("PSM count")
         if outdir is not None:
             plt.savefig(str(Path(outdir, f'{title.replace(" ", "_")}.svg')))
-        if not save_only:
+        if visualize:
             plt.show()
-        plt.clf()
-        plt.close()
+        if return_fig:
+            return fig, ax
+        else:
+            plt.clf()
+            plt.close()
+            return None, None
 
     @staticmethod
     def plot_roc(roc,
                  outdir: Union[str, PathLike] = None,
-                 save_only: bool = False,
-                 title: str = 'ROC'):
+                 visualize: bool = True,
+                 title: str = 'ROC',
+                 return_fig: bool = True):
         qs = roc[0][roc[0] <= 0.05]
         response = roc[1][roc[0] <= 0.05]
-        plt.plot(qs, response, ls='none', marker='.', ms=1)
-        plt.xlim((0, 0.05))
-        plt.xlabel('FDR')
-        plt.ylabel('Number of PSMs')
+        fig, ax = plt.subplots()
+        ax.plot(qs, response, ls='none', marker='.', ms=1)
+        ax.set_xlim((0, 0.05))
+        ax.set_xlabel('FDR')
+        ax.set_ylabel('Number of PSMs')
         plt.title(title)
         if outdir is not None:
-            plt.savefig(str(Path(outdir, f'{title}.svg')))
-        if not save_only:
-            plt.show()
-        plt.clf()
-        plt.close()
+            fig.savefig(str(Path(outdir, f'{title}.svg')))
+        if visualize:
+            fig.show()
+        if return_fig:
+            return fig, ax
+        else:
+            plt.clf()
+            plt.close()
+            return None, None
 
     def visualize_training(self,
                            outdir: Union[str, PathLike] = None,
