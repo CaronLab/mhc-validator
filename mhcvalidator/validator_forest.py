@@ -19,7 +19,7 @@ from mhcvalidator.fdr import calculate_qs, calculate_peptide_level_qs, calculate
 import matplotlib.pyplot as plt
 from mhcflurry.encodable_sequences import EncodableSequences
 from mhcvalidator.models import get_model_without_peptide_encoding, get_model_with_peptide_encoding, peptide_sequence_encoder
-from mhcvalidator.peptides import clean_peptide_sequences
+from mhcvalidator.peptides import clean_peptide_sequences, remove_previous_and_next_aa
 from mhcnames import normalize_allele_name
 from copy import deepcopy
 from scipy.stats import percentileofscore
@@ -37,6 +37,8 @@ import subprocess
 import matplotlib.backends.backend_pdf as plt_pdf
 from contextlib import nullcontext
 from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
+from deeplc import DeepLC
+from pyteomics.mzml import MzML
 
 deprecation._PRINT_DEPRECATION_WARNINGS = False
 
@@ -108,6 +110,8 @@ class MhcValidator:
         self._netmhcpan_predictions: bool = False
         self.mhcflurry_predictions: pd.DataFrame = None
         self.netmhcpan_predictions: pd.DataFrame = None
+        self.modificationss = {'15.9949': 'Oxidation',
+                               '0.9840': 'Deamidation'}
         if max_threads < 1:
             self.max_threads: int = os.cpu_count()
         else:
@@ -597,6 +601,27 @@ class MhcValidator:
                 print(e)
             print(f'Unable to run MhcFlurry.'
                   f'{" See exception information above." if verbose_errors else ""}')
+
+    def add_deeplc_modifications(self, mods = 'default'):
+        if mods == 'default':
+            mods = {'15.9949': 'Oxidation',
+                    '0.9840': 'Deamidation'}
+        for key, value in mods.items():
+            self.modificationss[key] = value
+
+    def add_deeplc_features(self,
+                            rt_file: str,
+                            rt_header: str = 'retention_time_sec',
+                            calibration_qvalue: float = 0.01,
+                            calibration_features: Union[str, List[str]] = 'lnExpect',
+                            n_features_must_pass: int = 1):
+        peptides = remove_previous_and_next_aa(self.raw_data['Peptide'])
+        mask = self.get_qvalue_mask_from_features(cutoff=calibration_qvalue,
+                                                  n=n_features_must_pass,
+                                                  features_to_use=calibration_features)
+        mzml = MzML(mzml_file)
+
+
 
     @staticmethod
     def _string_contains(string: str, pattern: Union[List[str], str]):
@@ -1125,9 +1150,9 @@ class MhcValidator:
                                                   label_smoothing=label_smoothing,
                                                   visualize=visualize,
                                                   pdf_out=pdf_out)
-        df = pd.DataFrame(data=encoded_peps, columns=[f'mhcv_seq_encoding{x}' for x in range(np.shape(encoded_peps)[1])])
+        df = pd.DataFrame(data=encoded_peps, columns=[f'mhcv_seq_encoding@@{x}' for x in range(np.shape(encoded_peps)[1])])
         self.feature_matrix.drop(columns=[x for x in self.feature_matrix.columns
-                                          if 'mhcv_seq_encoding' in x], inplace=True)
+                                          if 'mhcv_seq_encoding@@' in x], inplace=True)
         self.feature_matrix = self.feature_matrix.join(df)
 
     def filter_library(self,
