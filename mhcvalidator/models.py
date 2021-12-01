@@ -50,23 +50,36 @@ def peptide_sequence_label_prediction():
     return model
 
 
-def peptide_sequence_encoder(dropout: float = 0.6, max_pep_length: int = 15, encoding_size: int = 3):
+def peptide_sequence_encoder(dropout: float = 0.6, max_pep_length: int = 15, encoding_size: int = 3,
+                             dense_layers: int = 2):
     pep_input = keras.Input(shape=(max_pep_length, 21))
     p = layers.BatchNormalization(input_shape=(max_pep_length, 21))(pep_input)
-    p = layers.Conv1D(18, 4, padding="valid", activation=tf.nn.tanh)(
-        p)  # this should perhaps be 18, not 12. there are up to three anchor sites and 6 alleles
-    p = layers.MaxPool1D()(p)
+    p = layers.Conv1D(12, 4, padding="valid", activation=tf.nn.tanh)(p)
+    #p = layers.MaxPool1D()(p)
     p = layers.Dropout(dropout)(p)
     p = layers.Flatten()(p)
-    p = layers.Dense(encoding_size*3, activation='relu')(p)
-    p = layers.Dropout(dropout)(p)
-    p = layers.Dense(encoding_size*3, activation='relu')(p)
+    p = layers.Dense(max_pep_length*2, activation='relu')(p)
     p = layers.Dropout(dropout)(p)
     p = layers.Dense(encoding_size, name='encoded_peptides', activation='relu')(p)
-    p = layers.Dropout(dropout)(p)
+    #p = layers.Dropout(dropout)(p)
     out = layers.Dense(1, activation=tf.nn.sigmoid)(p)
     model = keras.Model(inputs=pep_input, outputs=out)
     return model
+
+
+def peptide_sequence_autoencoder(dropout: float = 0.6, max_pep_length: int = 15, encoding_size: int = 3):
+    pep_input = keras.Input(shape=(max_pep_length, 21))
+    #p = layers.BatchNormalization(input_shape=(max_pep_length, 21))(pep_input)
+    p = layers.Conv1D(4, 4, padding="valid", activation='relu')(pep_input)
+    encoded = layers.MaxPool1D(3, name='encoded_peptides')(p)
+
+    x = layers.UpSampling1D(3)(encoded)
+    x = layers.Conv1DTranspose(4, 4, activation='relu', padding='valid')(x)
+    decoded = layers.Conv1DTranspose(21, 1, activation='sigmoid', padding='valid')(x)
+
+    autoencoder = keras.Model(pep_input, decoded)
+
+    return autoencoder
 
 
 def get_model_with_peptide_encoding(ms_feature_length: int, max_pep_length: int = 15, dropout: float = 0.6,
@@ -95,7 +108,7 @@ def get_model_with_peptide_encoding(ms_feature_length: int, max_pep_length: int 
 
 def get_model_without_peptide_encoding(ms_feature_length: int, max_pep_length: int, dropout: float = 0.6,
                                        hidden_layers: int = 3):
-    n_nodes = ms_feature_length * 3
+    n_nodes = ms_feature_length * 2
     input = keras.Input(shape=(ms_feature_length,))
     x = layers.BatchNormalization(input_shape=(ms_feature_length,))(input)
     for i in range(hidden_layers):

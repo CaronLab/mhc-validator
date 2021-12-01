@@ -753,7 +753,7 @@ class MhcValidator:
         get_model_function = self._get_model_func(encode_peptide_sequences)
 
         # CREATE CALLBACKS
-        model_name, callbacks_list = self._initialize_model(encode_peptide_sequences,
+        self.model, model_name, callbacks_list = self._initialize_model(encode_peptide_sequences,
                                                             hidden_layers,
                                                             dropout,
                                                             learning_rate,
@@ -812,7 +812,7 @@ class MhcValidator:
         min_val_loss = np.min(self.fit_history.history['val_loss'])
         stopping_idx = self.fit_history.history['val_loss'].index(min_val_loss) if keep_best_loss else \
             len(self.fit_history.history['val_loss']) - 1
-        pep_qs, pep_xs, pep_ys, peps = calculate_peptide_level_qs(self.predictions, self.y, self.peptides,
+        pep_qs, pep_xs, pep_ys, peps, counts = calculate_peptide_level_qs(self.predictions, self.y, self.peptides,
                                                                   higher_better=True)
         psm_target_mask = (self.qs <= 0.01) & (self.y == 1)
         n_psm_targets = np.sum(psm_target_mask)
@@ -860,6 +860,31 @@ class MhcValidator:
                 f.write(report)
         if return_model:
             return model_name
+
+    def compare_rocs(self,
+                     train_roc = None,
+                     val_roc = None,
+                     title: str = "Comparison of training and validation ROCs",
+                     visualize: bool = True,
+                     return_fig: bool = True):
+        if train_roc is None:
+            train_roc = calculate_roc(calculate_qs(self.training_predictions, self.y_train), self.y_train)
+        if val_roc is None:
+            val_roc = calculate_roc(calculate_qs(self.validation_predictions, self.y_val), self.y_val)
+        fig, ax = plt.subplots()
+        ax.plot(train_roc[0], train_roc[1], ls='-', lw=0.5, marker='.', label='Training predictions', c='#1F77B4')
+        ax.plot(val_roc[0], val_roc[1], ls='-', lw=0.5, marker='.', label='Validation predictions', c='#FF7F0F')
+        ax.legend()
+        plt.title(title)
+        ax.set_xlabel("FDR")
+        ax.set_ylabel("Number of PSMs")
+        fig.tight_layout()
+        if visualize:
+            fig.show()
+            plt.close(fig)
+            return None, None
+        if return_fig:
+            return fig, ax
 
     def test_initial_subset_by_mhc_predictions(self,
                                                encode_peptide_sequences: bool = False,
