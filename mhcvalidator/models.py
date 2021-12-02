@@ -83,20 +83,23 @@ def peptide_sequence_autoencoder(dropout: float = 0.6, max_pep_length: int = 15,
 
 
 def get_model_with_peptide_encoding(ms_feature_length: int, max_pep_length: int = 15, dropout: float = 0.6,
-                                    hidden_layers: int = 3):
+                                    hidden_layers_after_convolutions: int = 3, convolutional_layers: int = 1, conv_filter_size: int = 12,
+                                    conv_filter_stride: int = 4, n_encoded_sequence_features: int = 4,
+                                    after_convolutions_width_ratio: float = 2):
     pep_input = keras.Input(shape=(max_pep_length, 21))
     p = layers.BatchNormalization(input_shape=(max_pep_length, 21))(pep_input)
-    p = layers.Conv1D(12, 4, padding="valid", activation=tf.nn.tanh)(p)
-    p = layers.MaxPool1D()(p)
+    for i in range(convolutional_layers):
+        p = layers.Conv1D(conv_filter_size, conv_filter_stride, padding="valid", activation=tf.nn.tanh)(p)
+        p = layers.MaxPool1D()(p)
     p = layers.Dropout(dropout)(p)
     p = layers.Flatten()(p)
-    pep_out_flat = layers.Dense(4, activation=tf.nn.relu)(p)
+    pep_out_flat = layers.Dense(n_encoded_sequence_features, activation=tf.nn.relu)(p)
 
     ms_feature_input = keras.Input(shape=(ms_feature_length,))
     x = layers.BatchNormalization(input_shape=(ms_feature_length,))(ms_feature_input)
     x = layers.concatenate([x, pep_out_flat])
-    n_nodes = int(int(x.shape[1]) * 3)
-    for i in range(hidden_layers):
+    n_nodes = int(round(int(x.shape[1]) * after_convolutions_width_ratio))
+    for i in range(hidden_layers_after_convolutions):
         x = layers.Dense(n_nodes, activation=tf.nn.relu)(x)
         x = layers.Dropout(dropout)(x)
     output = layers.Dense(1, activation=tf.nn.sigmoid)(x)
@@ -107,8 +110,8 @@ def get_model_with_peptide_encoding(ms_feature_length: int, max_pep_length: int 
 
 
 def get_model_without_peptide_encoding(ms_feature_length: int, max_pep_length: int, dropout: float = 0.6,
-                                       hidden_layers: int = 3):
-    n_nodes = ms_feature_length * 2
+                                       hidden_layers: int = 3, width_ratio: float = 2):
+    n_nodes = int(round(ms_feature_length * width_ratio))
     input = keras.Input(shape=(ms_feature_length,))
     x = layers.BatchNormalization(input_shape=(ms_feature_length,))(input)
     for i in range(hidden_layers):
