@@ -1,5 +1,7 @@
 import os
-
+import logging
+import sys
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import numpy.random
 import pandas as pd
 import numpy as np
@@ -8,7 +10,7 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import backend as K
 from typing import Union, List
-from os import PathLike
+from os import PathLike, devnull
 from pathlib import Path
 from mhcvalidator.data_loaders import load_file, load_pout_data
 from mhcvalidator.features import prepare_features, eliminate_common_peptides_between_sets
@@ -41,9 +43,20 @@ from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
 from deeplc import DeepLC
 from pyteomics.mzml import MzML
 from sklearn.base import TransformerMixin
-from hyperopt import fmin, tpe, hp
+from hyperopt import fmin, tpe, hp, space_eval
+from hyperopt.pyll.base import scope
+from scipy.stats import pearsonr
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 
 deprecation._PRINT_DEPRECATION_WARNINGS = False
+
+
+@contextmanager
+def suppress_stdout_stderr():
+    """A context manager that redirects stdout and stderr to devnull"""
+    with open(devnull, 'w') as fnull:
+        with redirect_stderr(fnull) as err, redirect_stdout(fnull) as out:
+            yield (err, out)
 
 # This can be uncommented to prevent the GPU from getting used.
 # import os
@@ -54,7 +67,6 @@ deprecation._PRINT_DEPRECATION_WARNINGS = False
 # tf.config.threading.set_inter_op_parallelism_threads(0)
 # tf.config.threading.set_intra_op_parallelism_threads(0)
 # tf.config.set_soft_device_placement(enabled=True)
-
 
 DEFAULT_TEMP_MODEL_DIR = str(Path(tempfile.gettempdir()) / 'validator_models')
 
@@ -613,6 +625,8 @@ class MhcValidator:
         return False
 
     def get_qvalue_mask_from_features(self,
+                                      X = None,
+                                      y = None,
                                       cutoff: float = 0.05,
                                       n: int = 1,
                                       features_to_use: Union[List[str], str] = 'all',
@@ -633,8 +647,12 @@ class MhcValidator:
         else:
             columns = features_to_use
 
-        X = self.feature_matrix.copy(deep=True).to_numpy()
-        y = deepcopy(self.labels)
+        if X is None:
+            X = self.feature_matrix.copy(deep=True).to_numpy()
+        else:
+            X = np.array(X)
+        if y is None:
+            y = deepcopy(self.labels)
 
         col_idx = [list(self.feature_matrix.columns).index(x) for x in columns]
         passes = np.zeros(X.shape, dtype=bool)
@@ -797,39 +815,614 @@ class MhcValidator:
 
         return model
 
-    def consolidated_run(self,
-                         model,
-                         model_fit_function=None,
-                         model_predict_function=None,
-                         additional_training_data_for_model=None,
-                         return_prediction_data_and_model: bool = False,
-                         q_value_subset: float = 1.0,
-                         features_for_subset: Union[List[str], str] = 'all',
-                         subset_threshold: int = 1,
-                         encode_peptide_sequences: bool = False,
-                         validation_split: float = 0.5,
-                         weight_by_inverse_peptide_counts: bool = True,
-                         visualize: bool = True,
-                         report_dir: Union[str, PathLike] = None,
-                         random_seed: int = None,
-                         report_vebosity: int = 1,
-                         clear_session: bool = True,
-                         alternate_labels=None,
-                         initial_model_weights: str = None,
-                         keep_best_loss: bool = True,
-                         fig_pdf: Union[str, PathLike] = None,
-                         **kwargs):
+    def run2(self,
+            model,
+            model_fit_function='fit',
+            model_predict_function='predict',
+            post_prediction_fn=lambda x: x,
+            additional_training_data_for_model=None,
+            return_prediction_data_and_model: bool = False,
+            q_value_subset: float = 1.0,
+            features_for_subset: Union[List[str], str] = 'all',
+            subset_threshold: int = 1,
+            encode_peptide_sequences: bool = False,
+            weight_by_inverse_peptide_counts: bool = True,
+            visualize: bool = True,
+            report_dir: Union[str, PathLike] = None,
+            random_seed: int = None,
+            report_vebosity: int = 1,
+            clear_session: bool = True,
+            alternate_labels=None,
+            initial_model_weights: str = None,
+            keep_best_loss: bool = True,
+            fig_pdf: Union[str, PathLike] = None,
+            **kwargs):
 
         if clear_session:
             K.clear_session()
 
         self._set_seed(random_seed)
 
-        if model_predict_function is None:
-            model_predict_function = model.predict
+        if initial_model_weights is not None:
+            model.load(initial_model_weights)
 
-        if model_fit_function is None:
-            model_fit_function = model.fit
+        # prepare data for training
+        all_data = self.feature_matrix.copy(deep=True)
+
+        if alternate_labels is None:
+            labels = deepcopy(self.labels)
+        else:
+            labels = alternate_labels
+
+        if q_value_subset < 1.:
+            mask = self.get_qvalue_mask_from_features(cutoff=q_value_subset,
+                                                      n=subset_threshold,
+                                                      features_to_use=features_for_subset,
+                                                      verbosity=1)
+        else:
+            mask = np.ones_like(labels, dtype=bool)
+
+        if encode_peptide_sequences:
+            all_data[['AA1', 'AA2', 'AA3', 'AAm-1', 'AAm', 'AAm+1', 'AA-3', 'AA-2', 'AA-1', 'odd_length']] = ''
+            peps = pd.Series(data=self.peptides[mask])
+            all_data.iloc[:, -10:] = pd.DataFrame(peps.apply(self._simple_peptide_encoding).to_list())
+
+        idx = np.random.RandomState(self.random_seed).choice(np.sum(mask), np.sum(mask), False)
+        n = int(len(idx) * 0.5)
+
+        set1_indices = idx[:n]
+        set2_indices = idx[n:]
+
+        model1 = deepcopy(model)
+        model2 = deepcopy(model)
+
+        output = []
+
+        for train_index, predict_index, model in [(set1_indices, set2_indices, model1), (set2_indices, set1_indices, model2)]:
+            self._set_seed(random_seed=random_seed)
+            feature_matrix = all_data.copy(deep=True)
+            x_train = feature_matrix[mask].iloc[train_index, :].copy(deep=True)
+            x_test = feature_matrix[mask].iloc[predict_index, :].copy(deep=True)
+            input_scalar = NDStandardScaler()
+            input_scalar = input_scalar.fit(x_train.values)
+            x_train.loc[:, :] = input_scalar.transform(x_train.values)
+            x_test.loc[:, :] = input_scalar.transform(x_test.values)
+            feature_matrix.loc[:, :] = input_scalar.transform(feature_matrix.values)
+
+            #x_train = tfdf.keras.pd_dataframe_to_tf_dataset(x_train, label="Label", weight=weight)
+            #x_test = tfdf.keras.pd_dataframe_to_tf_dataset(x_test, label="Label")
+            #x = tfdf.keras.pd_dataframe_to_tf_dataset(feature_matrix, label='Label')
+            x = deepcopy(feature_matrix.values)
+            x_train = deepcopy(x_train.values)
+            x_test = deepcopy(x_test.values)
+            train_labels = labels[mask][train_index]
+            test_labels = labels[mask][predict_index]
+
+            if weight_by_inverse_peptide_counts:
+                pep_counts = Counter(self.peptides)
+                weights = np.array([np.sqrt(1 / pep_counts[p]) for p in self.peptides[train_index]])
+            else:
+                weights = np.ones_like(labels[train_index])
+
+            if additional_training_data_for_model is not None:
+                additional_training_data_for_model = deepcopy(additional_training_data_for_model)
+                x2_train = additional_training_data_for_model[mask][train_index]
+                x2_test = additional_training_data_for_model[mask][predict_index]
+                input_scalar2 = NDStandardScaler()
+                input_scalar2 = input_scalar2.fit(x2_train)
+
+                x2_train = input_scalar2.transform(x2_train)
+                x2_test = input_scalar2.transform(x2_test)
+                additional_training_data_for_model = input_scalar2.transform(additional_training_data_for_model)
+
+                #x2_train = tfdf.keras.pd_dataframe_to_tf_dataset(x2_train, weight=weights)
+                #x2_test = tfdf.keras.pd_dataframe_to_tf_dataset(x2_test)
+                #additional_training_data_for_model = tfdf.keras.pd_dataframe_to_tf_dataset(additional_training_data_for_model)
+
+                x_train = (x_train, x2_train)
+                x_test = (x_test, x2_test)
+                x = (x, additional_training_data_for_model)
+
+            exec(f"model.{model_fit_function}(x_train, train_labels, sample_weight=weights, **kwargs)")
+
+            test_preds = post_prediction_fn(eval(f"model.{model_predict_function}(x_test)")).flatten()  # all these predictions are assumed to be arrays. we flatten them because sometimes the have an extra dimension of size 1
+            train_preds = post_prediction_fn(eval(f"model.{model_predict_function}(x_train)")).flatten()
+            test_qs = calculate_qs(test_preds.flatten(), test_labels)
+            train_qs = calculate_qs(train_preds.flatten(), train_labels)
+            preds = post_prediction_fn(eval(f"model.{model_predict_function}(x)")).flatten()
+            qs = calculate_qs(preds.flatten(), labels)
+
+            self.test_preds = test_preds
+            self.train_preds = train_preds
+            self.test_qs = test_qs
+            self.train_qs = train_qs
+            self.test_labels = test_labels
+            self.train_labels = train_labels
+            self.predictions = preds
+            self.qs = qs
+
+            if fig_pdf is not None:
+                pdf = plt_pdf.PdfPages(str(fig_pdf), keep_empty=False)
+
+            fig = plt.figure(constrained_layout=True, figsize=(10, 10))
+            gs = GridSpec(2, 2, figure=fig)
+
+            # create sub plots as grid
+            ax1 = fig.add_subplot(gs[0, 0])
+            ax2 = fig.add_subplot(gs[0, 1])
+            ax3 = fig.add_subplot(gs[1, :])
+
+            ax1.hist(train_preds[train_labels == 0], label='Decoy', bins=30, alpha=0.5)
+            ax1.hist(train_preds[train_labels == 1], label='Target', bins=30, alpha=0.5)
+            ax1.legend()
+            ax1.set_title("Training data")
+            ax1.set_xlim((0, 1))
+            ax1.set_xlabel('Target probability')
+            # plt.yscale('log')
+
+            ax2.hist(test_preds[test_labels == 0], label='Decoy', bins=30, alpha=0.5)
+            ax2.hist(test_preds[test_labels == 1], label='Target', bins=30, alpha=0.5)
+            ax2.legend()
+            ax2.set_title("Testing data")
+            ax2.set_xlim((0, 1))
+            ax2.set_xlabel('Target probability')
+            # plt.yscale('log')
+
+            train_roc = calculate_roc(train_qs, train_labels, qvalue_cutoff=0.05)
+            val_roc = calculate_roc(test_qs, test_labels, qvalue_cutoff=0.05)
+
+            if len(train_roc[1]) > 0:
+                train_at_01_fdr = train_roc[1][train_roc[0] <= 0.01][-1]
+            else:
+                train_at_01_fdr = 0
+            if len(val_roc[1]) > 0:
+                val_at_01_fdr = val_roc[1][val_roc[0] <= 0.01][-1]
+            else:
+                val_at_01_fdr = 0
+
+            ax3.plot(train_roc[0], train_roc[1], ls='-', lw='0.5', marker='.', label='Training predictions', c='#1F77B4', alpha=1)
+            ax3.plot(val_roc[0], val_roc[1], ls='-', lw='0.5', marker='.', label='Validation predictions', c='#FF7F0F', alpha=1)
+            ax3.vlines(0.01, 0, max(train_at_01_fdr, val_at_01_fdr), colors='k', ls='--')
+            ax3.plot((0, 0.01), (train_at_01_fdr, train_at_01_fdr), c='k', ls='--', ms=None)
+            ax3.plot((0, 0.01), (val_at_01_fdr, val_at_01_fdr), c='k', ls='--', marker=None)
+            ax3.legend()
+            ax3.set_title("ROC curve")
+            ax3.set_xlabel("FDR")
+            ax3.set_ylabel("Number of PSMs")
+            ax3.set_ylim((0, ax3.get_ylim()[1]))
+            ax3.set_xlim((0, 0.05))
+
+            if q_value_subset < 1:
+                fig.suptitle("Training and validation\n"
+                             f"Subset: {subset_threshold} or more features with q-value <= {q_value_subset}", fontsize=14)
+            else:
+                fig.suptitle("Training and validation", fontsize=14)
+            if visualize:
+                fig.show()
+            if fig_pdf is not None:
+                pdf.savefig(fig)
+            plt.close(fig)
+
+            fig = plt.figure(constrained_layout=True, figsize=(8, 8))
+            gs = GridSpec(2, 2, figure=fig)
+
+            # create sub plots as grid
+            ax1 = fig.add_subplot(gs[0, :])
+            ax3 = fig.add_subplot(gs[1, :])
+
+            ax1.hist(preds[labels == 0], label='Decoy', bins=30, alpha=0.5)
+            ax1.hist(preds[labels == 1], label='Target', bins=30, alpha=0.5)
+            ax1.legend()
+            ax1.set_title("Prediction distribution")
+            ax1.set_xlim((0, 1))
+            # plt.yscale('log')
+
+            roc = calculate_roc(qs, labels, qvalue_cutoff=0.05)
+
+            self.predictions = preds
+            self.qs = qs
+            self.roc = roc
+
+            ax3.plot(roc[0], roc[1], ls='-', lw='0.5', marker='.', c='#1F77B4', alpha=1)
+            ax3.axvline(0.01, c='k', ls='--')
+            ax3.axvline(0.05, c='k', ls='--')
+            ax3.set_title("ROC curve")
+            ax3.set_xlabel("FDR")
+            ax3.set_ylabel("Number of PSMs")
+
+            fig.suptitle("Predictions for all data", fontsize=14)
+            if visualize:
+                fig.show()
+            if fig_pdf is not None:
+                pdf.savefig(fig)
+            plt.close(fig)
+
+            '''logs = model.make_inspector().training_logs()
+    
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+    
+            ax1.plot([log.num_trees for log in logs], [log.evaluation.accuracy for log in logs])
+            ax1.set_xlabel("Number of trees")
+            ax1.set_ylabel("Accuracy (out-of-bag)")
+    
+            ax2.plot([log.num_trees for log in logs], [log.evaluation.loss for log in logs])
+            ax2.set_xlabel("Number of trees")
+            ax2.set_ylabel("Logloss (out-of-bag)")
+    
+            if visualize:
+                fig.show()
+            if fig_pdf is not None:
+                pdf.savefig(fig)
+            plt.close()'''
+            if fig_pdf is not None:
+                pdf.close()
+
+            n_targets = np.sum(self.labels == 1)
+            n_decoys = np.sum(self.labels == 0)
+            psms = self.peptides[(qs <= 0.01) & (self.labels == 1)]
+            n_psm_targets = len(psms)
+            n_unique_psms = len(set(psms))
+            pep_level_qs, _, pep_level_labels, peps, pep_counts = calculate_peptide_level_qs(preds,
+                                                                                             self.labels,
+                                                                                             self.peptides)
+            n_unique_peps = np.sum((pep_level_qs <= 0.01) & (pep_level_labels == 1))
+
+            ratio = len(train_labels) / len(test_labels)
+            n_training_targets = np.sum((train_qs <= 0.01) & (train_labels == 1))
+            n_testing_targets = np.sum((test_qs <= 0.01) & (test_labels == 1))
+
+            report = '\n========== REPORT ==========\n\n' \
+                     f'Total PSMs: {len(self.labels)}\n' \
+                     f'Labeled as targets: {n_targets}\n' \
+                     f'Labeled as decoys: {n_decoys}\n' \
+                     f'Global FDR: {round(n_decoys / n_targets, 3)}\n' \
+                     f'Theoretical number of possible true positives (PSMs): {n_targets - n_decoys}\n' \
+                     '----- CONFIDENT PSMS AND PEPTIDES -----\n' \
+                     f'Training PSMs at 1% FDR: {n_training_targets}\n' \
+                     f'Testing PSMs at 1% FDR: {n_testing_targets}\n' \
+                     f'Ratio of training set size to testing set size: {ratio}\n' \
+                     f'Ratio of training PSMs to testing PSMs at 1% FDR: {n_training_targets / n_testing_targets}\n\n' \
+                     f'Target PSMs at 1% FDR: {n_psm_targets}\n' \
+                     f'Unique peptides at 1% PSM-level FDR: {n_unique_psms}\n' \
+                     f'Unique peptides at 1% peptide-level FDR: {n_unique_peps}\n'
+
+            if report_vebosity > 0:
+                print(report)
+            self.raw_data['mhcv_prob'] = list(self.predictions)
+            self.raw_data['mhcv_q-value'] = list(self.qs)
+            self.raw_data['mhcv_label'] = list(self.labels)
+            self.raw_data['mhcv_peptide'] = list(self.peptides)
+
+            output.append({'train_preds': train_preds, 'train_labels': train_labels, 'train_qs': train_qs,
+                      'train_roc': train_roc, 'test_preds': test_preds, 'test_labels': test_labels, 'test_qs': test_qs,
+                      'test_roc': val_roc, 'preds': preds, 'labels': labels, 'qs': qs, 'roc': roc, 'model': model})
+
+        if return_prediction_data_and_model:
+            return output
+
+    def run3(self,
+             model,
+             model_fit_function='fit',
+             model_predict_function='predict',
+             post_prediction_fn=lambda x: x,
+             additional_training_data_for_model=None,
+             return_prediction_data_and_model: bool = False,
+             n_splits: int = 3,
+             q_value_subset: float = 1.0,
+             features_for_subset: Union[List[str], str] = 'all',
+             subset_threshold: int = 1,
+             encode_peptide_sequences: bool = False,
+             weight_by_inverse_peptide_counts: bool = True,
+             visualize: bool = True,
+             report_dir: Union[str, PathLike] = None,
+             random_seed: int = None,
+             report_vebosity: int = 1,
+             clear_session: bool = True,
+             alternate_labels=None,
+             initial_model_weights: str = None,
+             keep_best_loss: bool = True,
+             fig_pdf: Union[str, PathLike] = None,
+             disable_weights: bool = False,
+             **kwargs):
+
+        if clear_session:
+            K.clear_session()
+
+        if random_seed is None:
+            random_seed = self.random_seed
+        self._set_seed(random_seed)
+
+        if initial_model_weights is not None:
+            model.load(initial_model_weights)
+
+        # prepare data for training
+        all_data = self.feature_matrix.copy(deep=True)
+
+        if alternate_labels is None:
+            labels = deepcopy(self.labels)
+        else:
+            labels = alternate_labels
+
+        if encode_peptide_sequences:
+            all_data[['AA1', 'AA2', 'AA3', 'AAm-1', 'AAm', 'AAm+1', 'AA-3', 'AA-2', 'AA-1', 'odd_length']] = ''
+            peps = pd.Series(data=self.peptides)
+            all_data.iloc[:, -10:] = pd.DataFrame(peps.apply(self._simple_peptide_encoding).to_list())
+
+        all_data = all_data.values
+        peptides = self.peptides
+
+        skf = list(StratifiedKFold(n_splits=n_splits,
+                                   random_state=random_seed,
+                                   shuffle=True).split(all_data, labels))
+        models = [deepcopy(model) for m in range(n_splits)]
+
+        splits = list(zip(*zip(*skf), models))
+
+        predictions = np.zeros_like(labels, dtype=float)
+
+        output = []
+
+        for train_index, predict_index, model in splits:
+            self._set_seed(random_seed=random_seed)
+            feature_matrix = deepcopy(all_data)
+
+            if q_value_subset < 1.:
+                mask = self.get_qvalue_mask_from_features(X=feature_matrix[train_index],
+                                                          y=labels[train_index],
+                                                          cutoff=q_value_subset,
+                                                          n=subset_threshold,
+                                                          features_to_use=features_for_subset,
+                                                          verbosity=1)
+            else:
+                mask = np.ones_like(labels[train_index], dtype=bool)
+
+            x_train = deepcopy(feature_matrix[train_index, :][mask])
+            rnd_idx = RandomState(random_seed).choice(len(x_train), len(x_train), replace=False)
+            x_train = x_train[rnd_idx]
+            x_predict = deepcopy(feature_matrix[predict_index, :])
+            input_scalar = NDStandardScaler()
+            input_scalar = input_scalar.fit(x_train)
+            x_train = input_scalar.transform(x_train)
+            x_predict = input_scalar.transform(x_predict)
+            feature_matrix = input_scalar.transform(feature_matrix)
+
+            # x_train = tfdf.keras.pd_dataframe_to_tf_dataset(x_train, label="Label", weight=weight)
+            # x_test = tfdf.keras.pd_dataframe_to_tf_dataset(x_test, label="Label")
+            # x = tfdf.keras.pd_dataframe_to_tf_dataset(feature_matrix, label='Label')
+            x = deepcopy(feature_matrix)
+            x_train = deepcopy(x_train)
+            x_predict = deepcopy(x_predict)
+            train_labels = labels[train_index][mask][rnd_idx]
+            predict_labels = labels[predict_index]
+
+            if weight_by_inverse_peptide_counts:
+                pep_counts = Counter(self.peptides)
+                weights = np.array([np.sqrt(1 / pep_counts[p]) for p in self.peptides[train_index][mask][rnd_idx]])
+            else:
+                weights = np.ones_like(labels[train_index][mask][rnd_idx])
+
+            if additional_training_data_for_model is not None:
+                additional_training_data_for_model = deepcopy(additional_training_data_for_model)
+                x2_train = additional_training_data_for_model[train_index][mask][rnd_idx]
+                x2_test = additional_training_data_for_model[predict_index]
+                input_scalar2 = NDStandardScaler()
+                input_scalar2 = input_scalar2.fit(x2_train)
+
+                x2_train = input_scalar2.transform(x2_train)
+                x2_test = input_scalar2.transform(x2_test)
+                additional_training_data_for_model = input_scalar2.transform(additional_training_data_for_model)
+
+                x_train = (x_train, x2_train)
+                x_predict = (x_predict, x2_test)
+                x = (x, additional_training_data_for_model)
+
+            if disable_weights:
+                exec(f"model.{model_fit_function}(x_train, train_labels, **kwargs)")
+            else:
+                exec(f"model.{model_fit_function}(x_train, train_labels, sample_weight=weights, **kwargs)")
+
+            predict_preds = post_prediction_fn(eval(
+                f"model.{model_predict_function}(x_predict)")).flatten()  # all these predictions are assumed to be arrays. we flatten them because sometimes the have an extra dimension of size 1
+            train_preds = post_prediction_fn(eval(f"model.{model_predict_function}(x_train)")).flatten()
+            predict_qs = calculate_qs(predict_preds.flatten(), predict_labels)
+            train_qs = calculate_qs(train_preds.flatten(), train_labels)
+            preds = post_prediction_fn(eval(f"model.{model_predict_function}(x)")).flatten()
+            qs = calculate_qs(preds.flatten(), labels)
+            predictions[list(predict_index)] = predict_preds
+            assert np.all(predict_labels == self.labels[predict_index])
+
+            if fig_pdf is not None:
+                pdf = plt_pdf.PdfPages(str(fig_pdf), keep_empty=False)
+
+            fig = plt.figure(constrained_layout=True, figsize=(10, 10))
+            gs = GridSpec(2, 2, figure=fig)
+
+            # create sub plots as grid
+            ax1 = fig.add_subplot(gs[0, 0])
+            ax2 = fig.add_subplot(gs[0, 1])
+            ax3 = fig.add_subplot(gs[1, :])
+
+            ax1.hist(train_preds[train_labels == 0], label='Decoy', bins=30, alpha=0.5)
+            ax1.hist(train_preds[train_labels == 1], label='Target', bins=30, alpha=0.5)
+            ax1.legend()
+            ax1.set_title("Training data")
+            ax1.set_xlim((0, 1))
+            ax1.set_xlabel('Target probability')
+            # plt.yscale('log')
+
+            ax2.hist(predict_preds[predict_labels == 0], label='Decoy', bins=30, alpha=0.5)
+            ax2.hist(predict_preds[predict_labels == 1], label='Target', bins=30, alpha=0.5)
+            ax2.legend()
+            ax2.set_title("Testing data")
+            ax2.set_xlim((0, 1))
+            ax2.set_xlabel('Target probability')
+            # plt.yscale('log')
+
+            train_roc = calculate_roc(train_qs, train_labels, qvalue_cutoff=0.05)
+            val_roc = calculate_roc(predict_qs, predict_labels, qvalue_cutoff=0.05)
+
+            if len(train_roc[1]) > 0:
+                train_at_01_fdr = train_roc[1][train_roc[0] <= 0.01][-1]
+            else:
+                train_at_01_fdr = 0
+            if len(val_roc[1]) > 0:
+                val_at_01_fdr = val_roc[1][val_roc[0] <= 0.01][-1]
+            else:
+                val_at_01_fdr = 0
+
+            ax3.plot(train_roc[0], train_roc[1], ls='-', lw='0.5', marker='.', label='Training predictions',
+                     c='#1F77B4', alpha=1)
+            ax3.plot(val_roc[0], val_roc[1], ls='-', lw='0.5', marker='.', label='Validation predictions', c='#FF7F0F',
+                     alpha=1)
+            ax3.vlines(0.01, 0, max(train_at_01_fdr, val_at_01_fdr), colors='k', ls='--')
+            ax3.plot((0, 0.01), (train_at_01_fdr, train_at_01_fdr), c='k', ls='--', ms=None)
+            ax3.plot((0, 0.01), (val_at_01_fdr, val_at_01_fdr), c='k', ls='--', marker=None)
+            ax3.legend()
+            ax3.set_title("ROC curve")
+            ax3.set_xlabel("FDR")
+            ax3.set_ylabel("Number of PSMs")
+            ax3.set_ylim((0, ax3.get_ylim()[1]))
+            ax3.set_xlim((0, 0.05))
+
+            if q_value_subset < 1:
+                fig.suptitle("Training and validation\n"
+                             f"Subset: {subset_threshold} or more features with q-value <= {q_value_subset}",
+                             fontsize=14)
+            else:
+                fig.suptitle("Training and validation", fontsize=14)
+            if visualize:
+                fig.show()
+            if fig_pdf is not None:
+                pdf.savefig(fig)
+            plt.close(fig)
+
+            fig = plt.figure(constrained_layout=True, figsize=(8, 8))
+            gs = GridSpec(2, 2, figure=fig)
+
+            # create sub plots as grid
+            ax1 = fig.add_subplot(gs[0, :])
+            ax3 = fig.add_subplot(gs[1, :])
+
+            ax1.hist(preds[labels == 0], label='Decoy', bins=30, alpha=0.5)
+            ax1.hist(preds[labels == 1], label='Target', bins=30, alpha=0.5)
+            ax1.legend()
+            ax1.set_title("Prediction distribution")
+            ax1.set_xlim((0, 1))
+            # plt.yscale('log')
+
+            roc = calculate_roc(qs, labels, qvalue_cutoff=0.05)
+
+            ax3.plot(roc[0], roc[1], ls='-', lw='0.5', marker='.', c='#1F77B4', alpha=1)
+            ax3.axvline(0.01, c='k', ls='--')
+            ax3.axvline(0.05, c='k', ls='--')
+            ax3.set_title("ROC curve")
+            ax3.set_xlabel("FDR")
+            ax3.set_ylabel("Number of PSMs")
+
+            fig.suptitle("Predictions for all data", fontsize=14)
+            if visualize:
+                fig.show()
+            if fig_pdf is not None:
+                pdf.savefig(fig)
+            plt.close(fig)
+
+            '''logs = model.make_inspector().training_logs()
+
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+
+            ax1.plot([log.num_trees for log in logs], [log.evaluation.accuracy for log in logs])
+            ax1.set_xlabel("Number of trees")
+            ax1.set_ylabel("Accuracy (out-of-bag)")
+
+            ax2.plot([log.num_trees for log in logs], [log.evaluation.loss for log in logs])
+            ax2.set_xlabel("Number of trees")
+            ax2.set_ylabel("Logloss (out-of-bag)")
+
+            if visualize:
+                fig.show()
+            if fig_pdf is not None:
+                pdf.savefig(fig)
+            plt.close()'''
+            if fig_pdf is not None:
+                pdf.close()
+
+            n_targets = np.sum(self.labels == 1)
+            n_decoys = np.sum(self.labels == 0)
+            psms = self.peptides[(qs <= 0.01) & (self.labels == 1)]
+            n_psm_targets = len(psms)
+            n_unique_psms = len(set(psms))
+            pep_level_qs, _, pep_level_labels, peps, pep_counts = calculate_peptide_level_qs(preds,
+                                                                                             self.labels,
+                                                                                             self.peptides)
+            n_unique_peps = np.sum((pep_level_qs <= 0.01) & (pep_level_labels == 1))
+
+            ratio = len(train_labels) / len(predict_labels)
+            n_training_targets = np.sum((train_qs <= 0.01) & (train_labels == 1))
+            n_testing_targets = np.sum((predict_qs <= 0.01) & (predict_labels == 1))
+
+            report = '\n========== REPORT ==========\n\n' \
+                     f'Total PSMs: {len(self.labels)}\n' \
+                     f'Labeled as targets: {n_targets}\n' \
+                     f'Labeled as decoys: {n_decoys}\n' \
+                     f'Global FDR: {round(n_decoys / n_targets, 3)}\n' \
+                     f'Theoretical number of possible true positives (PSMs): {n_targets - n_decoys}\n' \
+                     '----- CONFIDENT PSMS AND PEPTIDES -----\n' \
+                     f'Training PSMs at 1% FDR: {n_training_targets}\n' \
+                     f'Testing PSMs at 1% FDR: {n_testing_targets}\n' \
+                     f'Ratio of training set size to testing set size: {ratio}\n' \
+                     f'Ratio of training PSMs to testing PSMs at 1% FDR: {n_training_targets / n_testing_targets}\n\n' \
+                     f'Target PSMs at 1% FDR: {n_psm_targets}\n' \
+                     f'Unique peptides at 1% PSM-level FDR: {n_unique_psms}\n' \
+                     f'Unique peptides at 1% peptide-level FDR: {n_unique_peps}\n'
+
+            if report_vebosity > 0:
+                print(report)
+            #self.raw_data['mhcv_prob'] = list(self.predictions)
+            #self.raw_data['mhcv_q-value'] = list(self.qs)
+            #self.raw_data['mhcv_label'] = list(self.labels)
+            #self.raw_data['mhcv_peptide'] = list(self.peptides)
+
+            results = {'train_preds': train_preds, 'train_labels': train_labels, 'train_qs': train_qs,
+                           'train_roc': train_roc, 'predict_preds': predict_preds, 'predict_labels': predict_labels,
+                           'predict_qs': predict_qs,
+                           'predict_roc': val_roc, 'preds': preds, 'labels': labels, 'qs': qs, 'roc': roc, 'model': model}
+            output.append(results)
+
+        self.predictions = predictions
+        self.qs = calculate_qs(predictions, self.labels)
+        self.roc = calculate_roc(self.qs, self.roc)
+
+        if return_prediction_data_and_model:
+            return output
+
+    def run(self,
+            model,
+            model_fit_function='fit',
+            model_predict_function='predict',
+            post_prediction_fn=lambda x: x,
+            additional_training_data_for_model=None,
+            return_prediction_data_and_model: bool = False,
+            q_value_subset: float = 1.0,
+            features_for_subset: Union[List[str], str] = 'all',
+            subset_threshold: int = 1,
+            encode_peptide_sequences: bool = False,
+            validation_split: float = 0.5,
+            weight_by_inverse_peptide_counts: bool = True,
+            visualize: bool = True,
+            report_dir: Union[str, PathLike] = None,
+            random_seed: int = None,
+            report_vebosity: int = 1,
+            clear_session: bool = True,
+            alternate_labels=None,
+            initial_model_weights: str = None,
+            keep_best_loss: bool = True,
+            fig_pdf: Union[str, PathLike] = None,
+            **kwargs):
+
+        if clear_session:
+            K.clear_session()
+
+        self._set_seed(random_seed)
 
         if initial_model_weights is not None:
             model.load(initial_model_weights)
@@ -900,13 +1493,13 @@ class MhcValidator:
             x_test = (x_test, x2_test)
             x = (x, additional_training_data_for_model)
 
-        model_fit_function(x=x_train, y=train_labels, sample_weight=weights, verbose=0, **kwargs)
+        exec(f"model.{model_fit_function}(x_train, train_labels, sample_weight=weights, **kwargs)")
 
-        test_preds = model_predict_function(x_test)
-        train_preds = model_predict_function(x_train)
+        test_preds = post_prediction_fn(eval(f"model.{model_predict_function}(x_test)")).flatten()  # all these predictions are assumed to be arrays. we flatten them because sometimes the have an extra dimension of size 1
+        train_preds = post_prediction_fn(eval(f"model.{model_predict_function}(x_train)")).flatten()
         test_qs = calculate_qs(test_preds.flatten(), test_labels)
         train_qs = calculate_qs(train_preds.flatten(), train_labels)
-        preds = model_predict_function(x)
+        preds = post_prediction_fn(eval(f"model.{model_predict_function}(x)")).flatten()
         qs = calculate_qs(preds.flatten(), labels)
 
         self.test_preds = test_preds
@@ -918,7 +1511,8 @@ class MhcValidator:
         self.predictions = preds
         self.qs = qs
 
-        pdf = plt_pdf.PdfPages(str(fig_pdf), keep_empty=False)
+        if fig_pdf is not None:
+            pdf = plt_pdf.PdfPages(str(fig_pdf), keep_empty=False)
 
         fig = plt.figure(constrained_layout=True, figsize=(10, 10))
         gs = GridSpec(2, 2, figure=fig)
@@ -947,8 +1541,14 @@ class MhcValidator:
         train_roc = calculate_roc(train_qs, train_labels, qvalue_cutoff=0.05)
         val_roc = calculate_roc(test_qs, test_labels, qvalue_cutoff=0.05)
 
-        train_at_01_fdr = train_roc[1][train_roc[0] <= 0.01][-1]
-        val_at_01_fdr = val_roc[1][val_roc[0] <= 0.01][-1]
+        if len(train_roc[1]) > 0:
+            train_at_01_fdr = train_roc[1][train_roc[0] <= 0.01][-1]
+        else:
+            train_at_01_fdr = 0
+        if len(val_roc[1]) > 0:
+            val_at_01_fdr = val_roc[1][val_roc[0] <= 0.01][-1]
+        else:
+            val_at_01_fdr = 0
 
         ax3.plot(train_roc[0], train_roc[1], ls='-', lw='0.5', marker='.', label='Training predictions', c='#1F77B4', alpha=1)
         ax3.plot(val_roc[0], val_roc[1], ls='-', lw='0.5', marker='.', label='Validation predictions', c='#FF7F0F', alpha=1)
@@ -963,7 +1563,7 @@ class MhcValidator:
         ax3.set_xlim((0, 0.05))
 
         if q_value_subset < 1:
-            fig.suptitle("fTraining and validation\n"
+            fig.suptitle("Training and validation\n"
                          f"Subset: {subset_threshold} or more features with q-value <= {q_value_subset}", fontsize=14)
         else:
             fig.suptitle("Training and validation", fontsize=14)
@@ -1024,7 +1624,8 @@ class MhcValidator:
         if fig_pdf is not None:
             pdf.savefig(fig)
         plt.close()'''
-        pdf.close()
+        if fig_pdf is not None:
+            pdf.close()
 
         n_targets = np.sum(self.labels == 1)
         n_decoys = np.sum(self.labels == 0)
@@ -1071,275 +1672,198 @@ class MhcValidator:
 
         # self.run(initial_model_weights=model_name, learning_rate=second_fit_learning_rate)
 
-    def run(self,
-            model: Union[str, List[str]] = 'forest',
-            q_value_subset: float = 1.0,
-            features_for_subset: Union[List[str], str] = 'all',
-            subset_threshold: int = 1,
-            encode_peptide_sequences: bool = False,
-            validation_split: float = 0.5,
-            num_trees: int = 2000,
-            max_depth: int = 1,
-            shrinkage: float = 0.05,
-            tfdf_hyperparameter_template: str = 'benchmark_rank1',
-            epochs: int = 30,
-            batch_size: int = 256,
-            loss_fn=tf.losses.BinaryCrossentropy(),
-            holdout_split: float = 0.25,
-            learning_rate: float = 0.001,
-            early_stopping_patience: int = 15,
-            dropout: float = 0.5,
-            hidden_layers: int = 3,
-            stratify_based_on_MHC_presentation: bool = False,
-            weight_by_inverse_peptide_counts: bool = True,
-            visualize: bool = True,
-            report_dir: Union[str, PathLike] = None,
-            random_seed: int = None,
-            return_model: bool = False,
-            fit_verbosity: int = 2,
-            report_vebosity: int = 1,
-            clear_session: bool = True,
-            alternate_labels=None,
-            initial_model_weights: str = None,
-            keep_best_loss: bool = True,
-            fig_pdf: Union[str, PathLike] = None,
-            kwargs=None):
+    def optimize_arbitrary_model(self,
+                                 model,
+                                 space,
+                                 instantiate_model: bool = False,
+                                 model_fit_function='fit',
+                                 model_predict_function='predict',
+                                 post_prediction_fn=lambda x: x,
+                                 objective_fn=None,
+                                 additional_training_data_for_model=None,
+                                 return_best_results: bool = False,
+                                 fdr_of_interest: float = 0.01,
+                                 algo=tpe.suggest,
+                                 n_evals: int = 100,
+                                 visualize_trials: bool = False,
+                                 visualize_best: bool = True,
+                                 report_dir: Union[str, PathLike] = None,
+                                 random_seed: int = None,
+                                 fig_pdf: Union[str, PathLike] = None,
+                                 additional_model_kwargs=None,
+                                 additional_fit_kwargs=None):
 
-        if clear_session:
-            K.clear_session()
+        K.clear_session()
+        if random_seed is None:
+            random_seed = self.random_seed
+        self._set_seed()
+        fmin_rstate = numpy.random.default_rng(random_seed)
+        if additional_fit_kwargs is None:
+            additional_fit_kwargs = {}
+        if additional_model_kwargs is None:
+            additional_model_kwargs = {}
 
-        if kwargs is None:
-            kwargs = {}
+        if objective_fn is None:
+            def objective_fn(params):
+                print(f'Parameters: {params}')
+                if instantiate_model:
+                    model_params = params['model_params']
+                    model_to_fit = model(**model_params, **additional_model_kwargs)
+                else:
+                    model_to_fit = model
+                fit_params = params['fit_params']
+                run_params = params['run_params']
+                results = self.run(model=model_to_fit,
+                                   model_fit_function=model_fit_function,
+                                   model_predict_function=model_predict_function,
+                                   post_prediction_fn=post_prediction_fn,
+                                   additional_training_data_for_model=additional_training_data_for_model,
+                                   return_prediction_data_and_model=True,
+                                   visualize=visualize_trials,
+                                   **run_params,
+                                   **fit_params,
+                                   **additional_fit_kwargs)
 
-        # with self.graph.as_default():
-        # tf.compat.v1.enable_eager_execution()
+                upper_q = fdr_of_interest + 0.01
+                lower_q = fdr_of_interest - 0.01
+                train_q_dist, _ = np.histogram(results['train_qs'][(results['train_qs'] >= lower_q) &
+                                                                   (results['train_qs'] <= upper_q) &
+                                                                   (results['train_labels'] == 1)])
+                val_q_dist, _ = np.histogram(results['test_qs'][(results['test_qs'] >= lower_q) &
+                                                                (results['test_qs'] <= upper_q) &
+                                                                (results['test_labels'] == 1)])
+                dist_correlation_score = 1 - pearsonr(train_q_dist, val_q_dist)[0]
 
-        if kwargs is None:
-            kwargs = dict()
+                cum_train_q_dist = [np.sum(train_q_dist[:i]) for i in range(len(train_q_dist))]
+                cum_val_q_dist = [np.sum(val_q_dist[:i]) for i in range(len(val_q_dist))]
+                cum_dist_correlation_score = 1 - pearsonr(cum_train_q_dist, cum_val_q_dist)[0]
 
-        self._set_seed(random_seed)
+                n_train = np.sum(train_q_dist)
+                n_val = np.sum(val_q_dist)
+                n_diff_psm_score = np.sum(np.abs(train_q_dist - val_q_dist) / np.max((train_q_dist, val_q_dist), axis=0))
 
-        # prepare data for training
-        feature_matrix = self.feature_matrix.copy(deep=True)
-        feature_matrix['Label'] = deepcopy(self.labels)
+                n_possible = np.sum(self.labels == 1) - np.sum(self.labels == 0)
+                n_targets = np.sum((results['qs'] <= 0.01) & (results['labels'] == 1))
+                n_psm_score = (n_possible - n_targets) / n_possible
 
-        if q_value_subset < 1.:
-            mask = self.get_qvalue_mask_from_features(cutoff=q_value_subset,
-                                                      n=subset_threshold,
-                                                      features_to_use=features_for_subset,
-                                                      verbosity=1)
+                combined_loss = np.mean((n_diff_psm_score * 2, n_psm_score))
+
+                print('Trial results:')
+                print(f'\tDistribution correlation loss: {dist_correlation_score}')
+                print(f'\tCumulative distribution correlation loss: {cum_dist_correlation_score}')
+                print(f'\tDifference between train and val at {fdr_of_interest} FDR loss: {n_diff_psm_score}')
+                print(f'\tPSMs at {fdr_of_interest} loss: {n_psm_score}')
+                print(f'\tCombined loss: {combined_loss}\n')
+
+                return combined_loss
+
+        best = fmin(fn=objective_fn,
+                    space=space,
+                    algo=algo,
+                    max_evals=n_evals,
+                    rstate=fmin_rstate)
+
+        best_args = space_eval(space, best)
+        print(f'Best parameters found: {best_args}')
+        print(f'Running best model')
+        if instantiate_model:
+            model_params = best_args['model_params']
+            model_to_fit = model(**model_params, **additional_model_kwargs)
         else:
-            mask = np.ones_like(self.labels, dtype=bool)
+            model_to_fit = model
+        # and here get only the params we need for this part
+        fit_params = best_args['fit_params']
+        run_params = best_args['run_params']
+        results = self.run(model=model_to_fit,
+                           model_fit_function=model_fit_function,
+                           model_predict_function=model_predict_function,
+                           additional_training_data_for_model=additional_training_data_for_model,
+                           return_prediction_data_and_model=True,
+                           visualize=visualize_best,
+                           **run_params,
+                           **fit_params, **additional_fit_kwargs)
+        if return_best_results:
+            return results
 
-        feature_matrix = self.feature_matrix[mask].copy(deep=True)
-        labels = deepcopy(self.labels[mask])
-        feature_matrix['Label'] = labels
-        if encode_peptide_sequences:
-            feature_matrix[['AA1', 'AA2', 'AA3', 'AAm-1', 'AAm', 'AAm+1', 'AA-3', 'AA-2', 'AA-1', 'odd_length']] = ''
-            peps = pd.Series(data=self.peptides[mask])
-            feature_matrix.iloc[:, -10:] = pd.DataFrame(peps.apply(self._simple_peptide_encoding).to_list())
+    def test_optimize_arbitrary_model(self):
+        model = self.get_nn_model_with_sequence_encoding
+        space = {'model_params': {'hidden_layers': hp.choice('hidden_layers', (1, 2, 3)),
+                                  'convolutional_layers': hp.choice('convolutional_layers', (1, 2))},
+                 'fit_params': {'epochs': hp.uniformint('epochs', 10, 60)}}
+        additional_model_kwargs = {}
+        additional_fit_kwargs = {'verbose': 0, 'batch_size': 256}
+        self.prepare_data()
+        extra_data = self.X_encoded_peps
 
-        idx = np.random.RandomState(self.random_seed).choice(len(feature_matrix), len(feature_matrix), False)
-        n = int(len(feature_matrix) * (1 - validation_split))
+        self.optimize_arbitrary_model(model, space, True, additional_training_data_for_model=extra_data,
+                                      n_evals=100, additional_model_kwargs=additional_model_kwargs,
+                                      additional_fit_kwargs=additional_fit_kwargs)
 
-        x_train = feature_matrix.iloc[idx[:n], :]
-        x_test = feature_matrix.iloc[idx[n:], :]
-        input_scalar = NDStandardScaler()
-        input_scalar = input_scalar.fit(x_train)
-        x_train.loc[:, :] = input_scalar.transform(x_train.values)
-        x_test.loc[:, :] = input_scalar.transform(x_test.values)
+    def optimize_nn_w_sequence_encoding(self, return_results: bool = False):
+        model = self.get_nn_model_with_sequence_encoding
+        space = {'model_params': {'hidden_layers': hp.choice('hidden_layers', (0, 1, 2, 3)),
+                                  'convolutional_layers': hp.choice('convolutional_layers', (1, 2)),
+                                  'dropout': hp.quniform('dropout', 0.4, 0.7, 0.05),
+                                  'width_ratio': hp.uniform('width_ratio', 1, 3),
+                                  'convolution_filter_size': scope.int(hp.quniform('convolution_filter_size', 4, 12, 2)),
+                                  'convolution_filter_stride': hp.choice('convolution_filter_stride', (1, 2, 3)),
+                                  'n_encoded_sequence_features': hp.choice('n_encoded_sequence_features', (3, 4, 5, 6, 7, 8, 9))},
+                 'fit_params': {'epochs': hp.uniformint('epochs', 10, 90),
+                                'batch_size': hp.choice('batch_size', 64, 128, 256, 512)}}
+        additional_model_kwargs = {}
+        additional_fit_kwargs = {'verbose': 0}
+        self.prepare_data()
+        extra_data = self.X_encoded_peps
 
-        x_train = tfdf.keras.pd_dataframe_to_tf_dataset(x_train, label="Label")
-        x_test = tfdf.keras.pd_dataframe_to_tf_dataset(x_test, label="Label")
-        train_labels = labels[idx[:n]]
-        test_labels = labels[idx[n:]]
+        results = self.optimize_arbitrary_model(model, space, True, additional_training_data_for_model=extra_data,
+                                                n_evals=100, additional_model_kwargs=additional_model_kwargs,
+                                                additional_fit_kwargs=additional_fit_kwargs,
+                                                return_best_results=True)
+        if return_results:
+            return results
 
-        self.model = tfdf.keras.GradientBoostedTreesModel(num_trees=num_trees, max_depth=max_depth,
-                                                     hyperparameter_template=tfdf_hyperparameter_template,
-                                                     shrinkage=shrinkage,
-                                                     **kwargs)
-        # growing_strategy='LOCAL', l1_regularization=0.9)
-        # model = tfdf.keras.CartModel()
-        self.model.fit(x_train, verbose=0)
-        self.model.compile(metrics=['accuracy'])
+    def optimize_nn(self, return_results: bool = False):
+        model = self.get_nn_model
+        space = {'model_params': {'hidden_layers': hp.choice('hidden_layers', (1, 2, 3)),
+                                  'dropout': hp.quniform('dropout', 0.4, 0.7, 0.05),
+                                  'width_ratio': hp.uniform('width_ratio', 1, 3)},
+                 'fit_params': {'epochs': hp.uniformint('epochs', 10, 90),
+                                'batch_size': hp.choice('batch_size', 64, 128, 256, 512)}}
+        additional_model_kwargs = {}
+        additional_fit_kwargs = {'verbose': 0}
+        self.prepare_data()
+        extra_data = self.X_encoded_peps
 
-        test_preds = self.model.predict(x_test)
-        train_preds = self.model.predict(x_train)
-        test_qs = calculate_qs(test_preds.flatten(), test_labels)
-        train_qs = calculate_qs(train_preds.flatten(), train_labels)
+        results = self.optimize_arbitrary_model(model, space, True,
+                                                n_evals=100, additional_model_kwargs=additional_model_kwargs,
+                                                additional_fit_kwargs=additional_fit_kwargs,
+                                                return_best_results=True)
+        if return_results:
+            return results
 
-        self.test_preds = test_preds
-        self.train_preds = train_preds
-        self.test_qs = test_qs
-        self.train_qs = train_qs
-        self.test_labels = test_labels
-        self.train_labels = train_labels
+    def optimize_forest(self, return_results: bool = False):
+        model = self.get_gradient_boosted_tree_model
+        space = {'model_params': {'num_trees': scope.int(hp.quniform('num_trees', 50, 2000, 25)),
+                                  'max_depth': hp.choice('max_depth', (1, 2, 3, 4)),
+                                  'shrinkage': hp.uniform('shrinkage', 0.02, 0.2),
+                                  'growing_strategy': hp.choice('growing_strategy', ('LOCAL', 'BEST_FIRST_GLOBAL')),
+                                  #'l1_regularization': hp.uniform('l1_regularization', 0, 1),
+                                  #'l2_regularization': hp.uniform('l2_regularization', 0, 1),
+                                  'min_examples': hp.uniformint('min_examples', 5, 20),
+                                  },#'sampling_method': hp.choice('sampling_method', ('NONE', 'RANDOM', 'GOSS'))},
+                 'fit_params': {},
+                 'run_params': {}}#'q_value_subset': hp.uniform('q_value_subset', 0.01, 1)}}
+        additional_model_kwargs = {}
+        additional_fit_kwargs = {'verbose': True}
+        self.prepare_data()
+        extra_data = self.X_encoded_peps
 
-        pdf = plt_pdf.PdfPages(str(fig_pdf), keep_empty=False)
-
-        fig = plt.figure(constrained_layout=True, figsize=(10, 10))
-        gs = GridSpec(2, 2, figure=fig)
-
-        # create sub plots as grid
-        ax1 = fig.add_subplot(gs[0, 0])
-        ax2 = fig.add_subplot(gs[0, 1])
-        ax3 = fig.add_subplot(gs[1, :])
-
-        ax1.hist(train_preds[train_labels == 0], label='Decoy', bins=30, alpha=0.5)
-        ax1.hist(train_preds[train_labels == 1], label='Target', bins=30, alpha=0.5)
-        ax1.legend()
-        ax1.set_title("Training data")
-        ax1.set_xlim((0, 1))
-        # plt.yscale('log')
-
-        ax2.hist(test_preds[test_labels == 0], label='Decoy', bins=30, alpha=0.5)
-        ax2.hist(test_preds[test_labels == 1], label='Target', bins=30, alpha=0.5)
-        ax2.legend()
-        ax2.set_title("Testing data")
-        ax2.set_xlim((0, 1))
-        # plt.yscale('log')
-
-        train_roc = calculate_roc(train_qs, train_labels, qvalue_cutoff=0.05)
-        val_roc = calculate_roc(test_qs, test_labels, qvalue_cutoff=0.05)
-
-        ax3.plot(train_roc[0], train_roc[1], ls='-', lw='0.5', marker='.', label='Training predictions', c='#1F77B4', alpha=1)
-        ax3.plot(val_roc[0], val_roc[1], ls='-', lw='0.5', marker='.', label='Validation predictions', c='#FF7F0F', alpha=1)
-        ax3.axvline(0.01, c='k', ls='--')
-        ax3.axvline(0.05, c='k', ls='--')
-        ax3.legend()
-        ax3.set_title("ROC curve")
-        ax3.set_xlabel("FDR")
-        ax3.set_ylabel("Number of PSMs")
-        ax3.set_ylim((0, ax3.get_ylim()[1]))
-
-        #train_roc = calculate_roc(train_qs, train_labels, qvalue_cutoff=0.5)
-        #val_roc = calculate_roc(test_qs, test_labels, qvalue_cutoff=0.5)
-
-        #ax4.plot(train_roc[0], train_roc[1], ls='-', lw='0.5', marker='.', label='Training predictions', c='#1F77B4', alpha=1)
-        #ax4.plot(val_roc[0], val_roc[1], ls='-', lw='0.5', marker='.', label='Validation predictions', c='#FF7F0F', alpha=1)
-        #ax4.axvline(0.01, c='k', ls='--')
-        #ax4.axvline(0.05, c='k', ls='--')
-        #ax4.legend()
-        #ax4.set_title("Expanded ROC curve")
-        #ax4.set_xlabel("FDR")
-        #ax4.set_ylabel("Number of PSMs")
-        #ax4.set_ylim((0, ax4.get_ylim()[1]))
-
-        if q_value_subset < 1:
-            fig.suptitle("Subset used for training and validation", fontsize=14)
-        else:
-            fig.suptitle("Training and validation", fontsize=14)
-        if visualize:
-            fig.show()
-        if fig_pdf is not None:
-            pdf.savefig(fig)
-        plt.close(fig)
-
-        ratio = len(train_labels) / len(test_labels)
-        n_training_targets = np.sum((train_qs <= 0.01) & (train_labels == 1))
-        n_testing_targets = np.sum((test_qs <= 0.01) & (test_labels == 1))
-        print(f'Training PSMs at 1% FDR: {n_training_targets}')
-        print(f'Testing PSMs at 1% FDR: {n_testing_targets}')
-        print(f'Ratio of training set size to testing set size: {ratio}')
-        print(f'Ratio of training PSMs to testing PSMs at 1% FDR: {n_training_targets / n_testing_targets}')
-
-        # Now use all the examples
-        feature_matrix = self.feature_matrix.copy(deep=True)
-        labels = deepcopy(self.labels)
-        feature_matrix['Labels'] = labels
-        if encode_peptide_sequences:
-            feature_matrix[['AA1', 'AA2', 'AA3', 'AAm-1', 'AAm', 'AAm+1', 'AA-3', 'AA-2', 'AA-1', 'odd_length']] = ''
-            peps = pd.Series(data=self.peptides)
-            feature_matrix.iloc[:, -10:] = pd.DataFrame(peps.apply(self._simple_peptide_encoding).to_list())
-        feature_matrix.loc[:, :] = input_scalar.transform(feature_matrix.values)
-        x = tfdf.keras.pd_dataframe_to_tf_dataset(feature_matrix)
-
-        preds = self.model.predict(x)
-        qs = calculate_qs(preds.flatten(), labels)
-
-        fig = plt.figure(constrained_layout=True, figsize=(8, 8))
-        gs = GridSpec(2, 2, figure=fig)
-
-        # create sub plots as grid
-        ax1 = fig.add_subplot(gs[0, :])
-        ax3 = fig.add_subplot(gs[1, :])
-
-        ax1.hist(preds[labels == 0], label='Decoy', bins=30, alpha=0.5)
-        ax1.hist(preds[labels == 1], label='Target', bins=30, alpha=0.5)
-        ax1.legend()
-        ax1.set_title("Prediction distribution")
-        ax1.set_xlim((0, 1))
-        # plt.yscale('log')
-
-        roc = calculate_roc(qs, labels, qvalue_cutoff=0.05)
-
-        self.predictions = preds
-        self.qs = qs
-        self.roc = roc
-
-        ax3.plot(roc[0], roc[1], ls='-', lw='0.5', marker='.', c='#1F77B4', alpha=1)
-        ax3.axvline(0.01, c='k', ls='--')
-        ax3.axvline(0.05, c='k', ls='--')
-        ax3.set_title("ROC curve")
-        ax3.set_xlabel("FDR")
-        ax3.set_ylabel("Number of PSMs")
-
-        fig.suptitle("Predictions for all data", fontsize=14)
-        if visualize:
-            fig.show()
-        if fig_pdf is not None:
-            pdf.savefig(fig)
-        plt.close(fig)
-
-        logs = self.model.make_inspector().training_logs()
-
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-
-        ax1.plot([log.num_trees for log in logs], [log.evaluation.accuracy for log in logs])
-        ax1.set_xlabel("Number of trees")
-        ax1.set_ylabel("Accuracy (out-of-bag)")
-
-        ax2.plot([log.num_trees for log in logs], [log.evaluation.loss for log in logs])
-        ax2.set_xlabel("Number of trees")
-        ax2.set_ylabel("Logloss (out-of-bag)")
-
-        if visualize:
-            fig.show()
-        if fig_pdf is not None:
-            pdf.savefig(fig)
-        plt.close()
-        pdf.close()
-
-        n_targets = np.sum(self.labels == 1)
-        n_decoys = np.sum(self.labels == 0)
-        psms = self.peptides[(qs <= 0.01) & (self.labels == 1)]
-        n_psm_targets = len(psms)
-        n_unique_psms = len(set(psms))
-        pep_level_qs, _, pep_level_labels, peps, pep_counts = calculate_peptide_level_qs(preds,
-                                                                                         self.labels,
-                                                                                         self.peptides)
-        n_unique_peps = np.sum((pep_level_qs <= 0.01) & (pep_level_labels == 1))
-
-
-        report = '\n========== REPORT ==========\n\n' \
-                 f'Total PSMs: {len(self.labels)}\n' \
-                 f'Labeled as targets: {n_targets}\n' \
-                 f'Labeled as decoys: {n_decoys}\n' \
-                 f'Global FDR: {round(n_decoys / n_targets, 3)}\n' \
-                 f'Theoretical number of possible true positives (PSMs): {n_targets - n_decoys}\n' \
-                 '----- CONFIDENT PSMS AND PEPTIDES -----\n' \
-                 f'Target PSMs at 1% FDR: {n_psm_targets}\n' \
-                 f'Unique peptides at 1% PSM-level FDR: {n_unique_psms}\n' \
-                 f'Unique peptides at 1% peptide-level FDR: {n_unique_peps}\n'
-
-        if report_vebosity > 0:
-            print(report)
-        self.raw_data['mhcv_prob'] = list(self.predictions)
-        self.raw_data['mhcv_q-value'] = list(self.qs)
-        self.raw_data['mhcv_label'] = list(self.labels)
-        self.raw_data['mhcv_peptide'] = list(self.peptides)
-
-        # self.run(initial_model_weights=model_name, learning_rate=second_fit_learning_rate)
+        results = self.optimize_arbitrary_model(model, space, True,
+                                                n_evals=50, additional_model_kwargs=additional_model_kwargs,
+                                                additional_fit_kwargs=additional_fit_kwargs,
+                                                return_best_results=True)
+        if return_results:
+            return results
 
     def find_best_sequence_encoding_w_hyperopt(self,
                                                target_fdr: float = 0.01,
