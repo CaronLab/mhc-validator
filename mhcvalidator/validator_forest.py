@@ -1,6 +1,9 @@
 import os
 import logging
 import sys
+
+import numpy
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import numpy.random
 import pandas as pd
@@ -47,6 +50,7 @@ from hyperopt import fmin, tpe, hp, space_eval
 from hyperopt.pyll.base import scope
 from scipy.stats import pearsonr
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from matplotlib.cm import get_cmap
 
 deprecation._PRINT_DEPRECATION_WARNINGS = False
 
@@ -1261,11 +1265,11 @@ class MhcValidator:
             train_roc = calculate_roc(train_qs, train_labels, qvalue_cutoff=0.05)
             val_roc = calculate_roc(predict_qs, predict_labels, qvalue_cutoff=0.05)
 
-            if len(train_roc[1]) > 0:
+            if len(train_roc[1][train_roc[0] <= 0.01]) > 0:
                 train_at_01_fdr = train_roc[1][train_roc[0] <= 0.01][-1]
             else:
                 train_at_01_fdr = 0
-            if len(val_roc[1]) > 0:
+            if len(val_roc[1][val_roc[0] <= 0.01]) > 0:
                 val_at_01_fdr = val_roc[1][val_roc[0] <= 0.01][-1]
             else:
                 val_at_01_fdr = 0
@@ -1385,15 +1389,51 @@ class MhcValidator:
             results = {'train_preds': train_preds, 'train_labels': train_labels, 'train_qs': train_qs,
                            'train_roc': train_roc, 'predict_preds': predict_preds, 'predict_labels': predict_labels,
                            'predict_qs': predict_qs,
-                           'predict_roc': val_roc, 'preds': preds, 'labels': labels, 'qs': qs, 'roc': roc, 'model': model}
+                           'predict_roc': val_roc, 'preds': preds, 'labels': labels, 'qs': qs, 'roc': roc, 'model': model,
+                       'train_index': train_index, 'predict_index': predict_index}
             output.append(results)
 
         self.predictions = predictions
         self.qs = calculate_qs(predictions, self.labels)
-        self.roc = calculate_roc(self.qs, self.roc)
+        self.roc = calculate_roc(self.qs, self.labels)
+
+        fig = plt.figure(constrained_layout=True, figsize=(6, 10))
+        gs = GridSpec(4, 1, figure=fig)
+        fig.suptitle('ROC curves for each cross-validation split')
+        # create sub plots as grid
+        train = fig.add_subplot(gs[0, 0])
+        val = fig.add_subplot(gs[1, 0])
+        all_pred = fig.add_subplot(gs[2, 0])
+        final = fig.add_subplot(gs[3, 0])
+
+        colormap = get_cmap("tab10")
+        for i, r in enumerate(output):
+            train.plot(*r['train_roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
+            val.plot(*r['predict_roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
+            all_pred.plot(*r['roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
+        final.plot(*self.roc, c=colormap(0), ms='3', ls='none', marker='.', alpha=0.6)
+
+        train.set_xlim((0, 0.05))
+        val.set_xlim((0, 0.05))
+        all_pred.set_xlim((0, 0.05))
+        final.set_xlim((0, 0.05))
+
+        train.set_title('Training data')
+        val.set_title('Validation data')
+        all_pred.set_title('All data')
+        final.set_title('Final q-values')
+
+        train.legend(markerscale=3)
+        val.legend(markerscale=3)
+        all_pred.legend(markerscale=3)
+
+        plt.show()
+        plt.close()
 
         if return_prediction_data_and_model:
-            return output
+            return output, {'predictions': deepcopy(self.predictions),
+                            'qs': deepcopy(self.qs),
+                            'roc': deepcopy(self.roc)}
 
     def run(self,
             model,
@@ -1785,6 +1825,114 @@ class MhcValidator:
         if return_best_results:
             return results
 
+    def optimize_arbitrary_model3(self,
+                                 model,
+                                 space,
+                                 instantiate_model: bool = False,
+                                 model_fit_function='fit',
+                                 model_predict_function='predict',
+                                 post_prediction_fn=lambda x: x,
+                                 objective_fn=None,
+                                 additional_training_data_for_model=None,
+                                 return_best_results: bool = False,
+                                 fdr_of_interest: float = 0.01,
+                                 algo=tpe.suggest,
+                                 n_evals: int = 100,
+                                 visualize_trials: bool = False,
+                                 visualize_best: bool = True,
+                                 report_dir: Union[str, PathLike] = None,
+                                 random_seed: int = None,
+                                 fig_pdf: Union[str, PathLike] = None,
+                                 additional_model_kwargs=None,
+                                 additional_fit_kwargs=None):
+
+        K.clear_session()
+        if random_seed is None:
+            random_seed = self.random_seed
+        self._set_seed()
+        fmin_rstate = numpy.random.default_rng(random_seed)
+        if additional_fit_kwargs is None:
+            additional_fit_kwargs = {}
+        if additional_model_kwargs is None:
+            additional_model_kwargs = {}
+
+        if objective_fn is None:
+            def objective_fn(params):
+                print(f'Parameters: {params}')
+                if instantiate_model:
+                    model_params = params['model_params']
+                    model_to_fit = model(**model_params, **additional_model_kwargs)
+                else:
+                    model_to_fit = model
+                fit_params = params['fit_params']
+                run_params = params['run_params']
+                results, compiled = self.run3(model=model_to_fit,
+                                   model_fit_function=model_fit_function,
+                                   model_predict_function=model_predict_function,
+                                   post_prediction_fn=post_prediction_fn,
+                                   additional_training_data_for_model=additional_training_data_for_model,
+                                   return_prediction_data_and_model=True,
+                                   visualize=visualize_trials,
+                                   **run_params,
+                                   **fit_params,
+                                   **additional_fit_kwargs)
+
+                n_good_targets = np.sum((self.qs <= fdr_of_interest) & (self.labels == 1))
+                n_decoys = np.sum(self.labels == 0)
+                n_targets = np.sum(self.labels == 1)
+                n_possible = n_targets - n_decoys
+                #n_psms_score = (np.abs(n_possible - n_good_targets) + 1) / n_possible
+                n_psms_score = np.abs(n_possible - n_good_targets)
+
+                # calculate the variance of the splits at psm_of_interest
+                n_psms = [np.sum((r['predict_qs'] <= fdr_of_interest) & (r['predict_labels'] == 1)) for r in results]
+                n_psms_variance = np.var(n_psms)
+                n_psms_mean = np.mean(n_psms)
+                if n_psms_variance == 0 or n_psms_mean == 0:
+                    n_psms_rel_variance = 1
+                else:
+                    n_psms_rel_variance = n_psms_variance / n_psms_mean
+
+                combined_loss = n_psms_score * n_psms_rel_variance
+
+                print('Trial results:')
+                print(f'\tTotal PSMs at {fdr_of_interest} FDR: {n_good_targets}')
+                print(f'\tTotal PSMs at {fdr_of_interest} FDR loss: {n_psms_score}')
+                print(f'\tVariance at {fdr_of_interest} FDR: {n_psms_variance}')
+                print(f'\tRelative variance at {fdr_of_interest} FDR: {n_psms_rel_variance}')
+                print(f'\tCombined loss: {combined_loss}\n')
+
+                return combined_loss
+
+        best = fmin(fn=objective_fn,
+                    space=space,
+                    algo=algo,
+                    max_evals=n_evals,
+                    rstate=fmin_rstate)
+
+        best_args = space_eval(space, best)
+        print(f'Best parameters found: {best_args}')
+        print(f'Running best model')
+        if instantiate_model:
+            model_params = best_args['model_params']
+            model_to_fit = model(**model_params, **additional_model_kwargs)
+        else:
+            model_to_fit = model
+        # and here get only the params we need for this part
+        fit_params = best_args['fit_params']
+        run_params = best_args['run_params']
+        results = self.run3(model=model_to_fit,
+                            model_fit_function=model_fit_function,
+                            model_predict_function=model_predict_function,
+                            post_prediction_fn=post_prediction_fn,
+                            additional_training_data_for_model=additional_training_data_for_model,
+                            return_prediction_data_and_model=True,
+                            visualize=visualize_best,
+                            **run_params,
+                            **fit_params, **additional_fit_kwargs)
+        if return_best_results:
+            return results
+
     def test_optimize_arbitrary_model(self):
         model = self.get_nn_model_with_sequence_encoding
         space = {'model_params': {'hidden_layers': hp.choice('hidden_layers', (1, 2, 3)),
@@ -1846,19 +1994,19 @@ class MhcValidator:
         space = {'model_params': {'num_trees': scope.int(hp.quniform('num_trees', 50, 2000, 25)),
                                   'max_depth': hp.choice('max_depth', (1, 2, 3, 4)),
                                   'shrinkage': hp.uniform('shrinkage', 0.02, 0.2),
-                                  'growing_strategy': hp.choice('growing_strategy', ('LOCAL', 'BEST_FIRST_GLOBAL')),
+                                  #'growing_strategy': hp.choice('growing_strategy', ('LOCAL', 'BEST_FIRST_GLOBAL')),
                                   #'l1_regularization': hp.uniform('l1_regularization', 0, 1),
                                   #'l2_regularization': hp.uniform('l2_regularization', 0, 1),
                                   'min_examples': hp.uniformint('min_examples', 5, 20),
                                   },#'sampling_method': hp.choice('sampling_method', ('NONE', 'RANDOM', 'GOSS'))},
-                 'fit_params': {},
-                 'run_params': {}}#'q_value_subset': hp.uniform('q_value_subset', 0.01, 1)}}
+                 'fit_params': {'verbose': False},
+                 'run_params': {'n_splits': hp.choice('n_splits', (2, 3, 4))}}#'q_value_subset': hp.uniform('q_value_subset', 0.01, 1)}}
         additional_model_kwargs = {}
         additional_fit_kwargs = {'verbose': True}
         self.prepare_data()
         extra_data = self.X_encoded_peps
 
-        results = self.optimize_arbitrary_model(model, space, True,
+        results = self.optimize_arbitrary_model3(model, space, True,
                                                 n_evals=50, additional_model_kwargs=additional_model_kwargs,
                                                 additional_fit_kwargs=additional_fit_kwargs,
                                                 return_best_results=True)
