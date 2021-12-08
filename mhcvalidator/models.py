@@ -93,6 +93,7 @@ def get_model_with_peptide_encoding(ms_feature_length: int, max_pep_length: int 
         p = layers.MaxPool1D()(p)
     p = layers.Dropout(dropout)(p)
     p = layers.Flatten()(p)
+    p = layers.Dense(n_encoded_sequence_features*3, activation=tf.nn.relu)(p)
     pep_out_flat = layers.Dense(n_encoded_sequence_features, activation=tf.nn.relu)(p)
 
     ms_feature_input = keras.Input(shape=(ms_feature_length,))

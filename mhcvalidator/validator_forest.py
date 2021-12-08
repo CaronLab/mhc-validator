@@ -1155,6 +1155,11 @@ class MhcValidator:
         all_data = all_data.values
         peptides = self.peptides
 
+        shuffle_idx = np.random.RandomState(random_seed).choice(len(peptides), len(peptides), replace=False)
+        all_data = all_data[shuffle_idx]
+        peptides = peptides[shuffle_idx]
+        labels = labels[shuffle_idx]
+
         skf = list(StratifiedKFold(n_splits=n_splits,
                                    random_state=random_seed,
                                    shuffle=True).split(all_data, labels))
@@ -1200,13 +1205,13 @@ class MhcValidator:
             predict_labels = labels[predict_index]
 
             if weight_by_inverse_peptide_counts:
-                pep_counts = Counter(self.peptides)
-                weights = np.array([np.sqrt(1 / pep_counts[p]) for p in self.peptides[train_index][mask][rnd_idx]])
+                pep_counts = Counter(peptides)
+                weights = np.array([np.sqrt(1 / pep_counts[p]) for p in peptides[train_index][mask][rnd_idx]])
             else:
                 weights = np.ones_like(labels[train_index][mask][rnd_idx])
 
             if additional_training_data_for_model is not None:
-                additional_training_data_for_model = deepcopy(additional_training_data_for_model)
+                additional_training_data_for_model = deepcopy(additional_training_data_for_model)[shuffle_idx]
                 x2_train = additional_training_data_for_model[train_index][mask][rnd_idx]
                 x2_test = additional_training_data_for_model[predict_index]
                 input_scalar2 = NDStandardScaler()
@@ -1232,8 +1237,8 @@ class MhcValidator:
             train_qs = calculate_qs(train_preds.flatten(), train_labels)
             preds = post_prediction_fn(eval(f"model.{model_predict_function}(x)")).flatten()
             qs = calculate_qs(preds.flatten(), labels)
-            predictions[list(predict_index)] = predict_preds
-            assert np.all(predict_labels == self.labels[predict_index])
+            predictions[predict_index] = predict_preds
+            assert np.all(predict_labels == self.labels[shuffle_idx][predict_index])
 
             if fig_pdf is not None:
                 pdf = plt_pdf.PdfPages(str(fig_pdf), keep_empty=False)
@@ -1350,14 +1355,12 @@ class MhcValidator:
             if fig_pdf is not None:
                 pdf.close()
 
-            n_targets = np.sum(self.labels == 1)
-            n_decoys = np.sum(self.labels == 0)
-            psms = self.peptides[(qs <= 0.01) & (self.labels == 1)]
+            n_targets = np.sum(labels == 1)
+            n_decoys = np.sum(labels == 0)
+            psms = peptides[(qs <= 0.01) & (labels == 1)]
             n_psm_targets = len(psms)
             n_unique_psms = len(set(psms))
-            pep_level_qs, _, pep_level_labels, peps, pep_counts = calculate_peptide_level_qs(preds,
-                                                                                             self.labels,
-                                                                                             self.peptides)
+            pep_level_qs, _, pep_level_labels, peps, pep_counts = calculate_peptide_level_qs(preds, labels, peptides)
             n_unique_peps = np.sum((pep_level_qs <= 0.01) & (pep_level_labels == 1))
 
             ratio = len(train_labels) / len(predict_labels)
@@ -1365,7 +1368,7 @@ class MhcValidator:
             n_testing_targets = np.sum((predict_qs <= 0.01) & (predict_labels == 1))
 
             report = '\n========== REPORT ==========\n\n' \
-                     f'Total PSMs: {len(self.labels)}\n' \
+                     f'Total PSMs: {len(labels)}\n' \
                      f'Labeled as targets: {n_targets}\n' \
                      f'Labeled as decoys: {n_decoys}\n' \
                      f'Global FDR: {round(n_decoys / n_targets, 3)}\n' \
@@ -1393,47 +1396,53 @@ class MhcValidator:
                        'train_index': train_index, 'predict_index': predict_index}
             output.append(results)
 
-        self.predictions = predictions
-        self.qs = calculate_qs(predictions, self.labels)
+        self.predictions = np.empty(len(labels), dtype=float)
+        self.qs = np.empty(len(labels), dtype=float)
+
+        self.predictions[shuffle_idx] = predictions
+        self.qs[shuffle_idx] = calculate_qs(predictions, labels)
         self.roc = calculate_roc(self.qs, self.labels)
 
-        fig = plt.figure(constrained_layout=True, figsize=(6, 10))
-        gs = GridSpec(4, 1, figure=fig)
-        fig.suptitle('ROC curves for each cross-validation split')
-        # create sub plots as grid
-        train = fig.add_subplot(gs[0, 0])
-        val = fig.add_subplot(gs[1, 0])
-        all_pred = fig.add_subplot(gs[2, 0])
-        final = fig.add_subplot(gs[3, 0])
+        if visualize:
+            fig = plt.figure(constrained_layout=True, figsize=(6, 10))
+            gs = GridSpec(12, 2, figure=fig)
+            fig.suptitle('ROC curves for each cross-validation split')
+            # create sub plots as grid
+            train = fig.add_subplot(gs[:4, 0])
+            val = fig.add_subplot(gs[4:8, 0])
+            all_pred = fig.add_subplot(gs[8:, 0])
+            dist = fig.add_subplot(gs[:6, 1])
+            final = fig.add_subplot(gs[6:, 1])
 
-        colormap = get_cmap("tab10")
-        for i, r in enumerate(output):
-            train.plot(*r['train_roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
-            val.plot(*r['predict_roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
-            all_pred.plot(*r['roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
-        final.plot(*self.roc, c=colormap(0), ms='3', ls='none', marker='.', alpha=0.6)
+            colormap = get_cmap("tab10")
+            for i, r in enumerate(output):
+                train.plot(*r['train_roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
+                val.plot(*r['predict_roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
+                all_pred.plot(*r['roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
+            final.plot(*self.roc, c=colormap(0), ms='3', ls='none', marker='.', alpha=0.6)
 
-        train.set_xlim((0, 0.05))
-        val.set_xlim((0, 0.05))
-        all_pred.set_xlim((0, 0.05))
-        final.set_xlim((0, 0.05))
+            train.set_xlim((0, 0.05))
+            val.set_xlim((0, 0.05))
+            all_pred.set_xlim((0, 0.05))
+            final.set_xlim((0, 0.05))
 
-        train.set_title('Training data')
-        val.set_title('Validation data')
-        all_pred.set_title('All data')
-        final.set_title('Final q-values')
+            train.set_title('Training data')
+            val.set_title('Validation data')
+            all_pred.set_title('All data')
+            final.set_title('Final q-values')
 
-        train.legend(markerscale=3)
-        val.legend(markerscale=3)
-        all_pred.legend(markerscale=3)
+            train.legend(markerscale=3)
+            val.legend(markerscale=3)
+            all_pred.legend(markerscale=3)
 
-        plt.show()
-        plt.close()
+            plt.show()
+            plt.close()
 
         if return_prediction_data_and_model:
             return output, {'predictions': deepcopy(self.predictions),
                             'qs': deepcopy(self.qs),
-                            'roc': deepcopy(self.roc)}
+                            'roc': deepcopy(self.roc),
+                            'shuffle_index': shuffle_idx}
 
     def run(self,
             model,
