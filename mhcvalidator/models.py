@@ -122,3 +122,16 @@ def get_model_without_peptide_encoding(ms_feature_length: int, max_pep_length: i
 
     model = keras.Model(inputs=input, outputs=output)
     return model
+
+
+def reset_weights(model):
+  for layer in model.layers:
+    if isinstance(layer, tf.keras.Model):
+      reset_weights(layer)
+      continue
+    for k, initializer in layer.__dict__.items():
+      if "initializer" not in k:
+        continue
+      # find the corresponding variable
+      var = getattr(layer, k.replace("_initializer", ""))
+      var.assign(initializer(var.shape, var.dtype))

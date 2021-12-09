@@ -1,9 +1,5 @@
 import os
-import logging
-import sys
-
 import numpy
-
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import numpy.random
 import pandas as pd
@@ -25,10 +21,10 @@ from mhcvalidator.fdr import calculate_qs, calculate_peptide_level_qs, calculate
 import matplotlib.pyplot as plt
 from mhcflurry.encodable_sequences import EncodableSequences
 from mhcvalidator.models import get_model_without_peptide_encoding, get_model_with_peptide_encoding, peptide_sequence_encoder, peptide_sequence_autoencoder
+from mhcvalidator.models import reset_weights
 from mhcvalidator.peptides import clean_peptide_sequences, remove_previous_and_next_aa
 from mhcnames import normalize_allele_name
 from copy import deepcopy
-from scipy.stats import percentileofscore
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.preprocessing import MinMaxScaler
 from datetime import datetime
@@ -36,7 +32,6 @@ from mhcvalidator.libraries import load_library, filter_library
 import tempfile
 from collections import Counter
 import tensorflow.python.util.deprecation as deprecation
-from multiprocessing import Process, Queue
 import tensorflow_decision_forests as tfdf
 from matplotlib.gridspec import GridSpec
 import subprocess
@@ -1163,16 +1158,17 @@ class MhcValidator:
         skf = list(StratifiedKFold(n_splits=n_splits,
                                    random_state=random_seed,
                                    shuffle=True).split(all_data, labels))
-        models = [deepcopy(model) for m in range(n_splits)]
 
-        splits = list(zip(*zip(*skf), models))
+        #splits = list(zip(*zip(*skf), models))
 
         predictions = np.zeros_like(labels, dtype=float)
 
         output = []
 
-        for train_index, predict_index, model in splits:
-            self._set_seed(random_seed=random_seed)
+        for train_index, predict_index in skf:
+            #self._set_seed(random_seed=random_seed)
+            if isinstance(model, keras.Model):
+                reset_weights(model)
             feature_matrix = deepcopy(all_data)
 
             if q_value_subset < 1.:
@@ -1240,6 +1236,10 @@ class MhcValidator:
             predictions[predict_index] = predict_preds
             assert np.all(predict_labels == self.labels[shuffle_idx][predict_index])
 
+            train_roc = calculate_roc(train_qs, train_labels, qvalue_cutoff=0.05)
+            val_roc = calculate_roc(predict_qs, predict_labels, qvalue_cutoff=0.05)
+            roc = calculate_roc(qs, labels, qvalue_cutoff=0.05)
+            """
             if fig_pdf is not None:
                 pdf = plt_pdf.PdfPages(str(fig_pdf), keep_empty=False)
 
@@ -1266,9 +1266,6 @@ class MhcValidator:
             ax2.set_xlim((0, 1))
             ax2.set_xlabel('Target probability')
             # plt.yscale('log')
-
-            train_roc = calculate_roc(train_qs, train_labels, qvalue_cutoff=0.05)
-            val_roc = calculate_roc(predict_qs, predict_labels, qvalue_cutoff=0.05)
 
             if len(train_roc[1][train_roc[0] <= 0.01]) > 0:
                 train_at_01_fdr = train_roc[1][train_roc[0] <= 0.01][-1]
@@ -1319,7 +1316,6 @@ class MhcValidator:
             ax1.set_xlim((0, 1))
             # plt.yscale('log')
 
-            roc = calculate_roc(qs, labels, qvalue_cutoff=0.05)
 
             ax3.plot(roc[0], roc[1], ls='-', lw='0.5', marker='.', c='#1F77B4', alpha=1)
             ax3.axvline(0.01, c='k', ls='--')
@@ -1353,7 +1349,7 @@ class MhcValidator:
                 pdf.savefig(fig)
             plt.close()'''
             if fig_pdf is not None:
-                pdf.close()
+                pdf.close()"""
 
             n_targets = np.sum(labels == 1)
             n_decoys = np.sum(labels == 0)
@@ -1404,9 +1400,8 @@ class MhcValidator:
         self.roc = calculate_roc(self.qs, self.labels)
 
         if visualize:
-            fig = plt.figure(constrained_layout=True, figsize=(6, 10))
+            fig = plt.figure(constrained_layout=True, figsize=(10, 10))
             gs = GridSpec(12, 2, figure=fig)
-            fig.suptitle('ROC curves for each cross-validation split')
             # create sub plots as grid
             train = fig.add_subplot(gs[:4, 0])
             val = fig.add_subplot(gs[4:8, 0])
@@ -1420,6 +1415,8 @@ class MhcValidator:
                 val.plot(*r['predict_roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
                 all_pred.plot(*r['roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
             final.plot(*self.roc, c=colormap(0), ms='3', ls='none', marker='.', alpha=0.6)
+            dist.hist(self.predictions[self.labels == 0], label='Decoy', bins=30, alpha=0.5, zorder=100)
+            dist.hist(self.predictions[self.labels == 1], label='Target', bins=30, alpha=0.5)
 
             train.set_xlim((0, 0.05))
             val.set_xlim((0, 0.05))
@@ -1427,14 +1424,31 @@ class MhcValidator:
             final.set_xlim((0, 0.05))
 
             train.set_title('Training data')
+            train.set_xlabel('q-value')
+            train.set_ylabel('PSMs')
+
             val.set_title('Validation data')
+            val.set_xlabel('q-value')
+            val.set_ylabel('PSMs')
+
             all_pred.set_title('All data')
+            all_pred.set_xlabel('q-value')
+            all_pred.set_ylabel('PSMs')
+
             final.set_title('Final q-values')
+            final.set_xlabel('q-value')
+            final.set_ylabel('PSMs')
+
+            dist.set_title('Prediction distributions')
+            dist.set_xlabel('Target probability')
+            dist.set_ylabel('PSMs')
 
             train.legend(markerscale=3)
             val.legend(markerscale=3)
             all_pred.legend(markerscale=3)
+            dist.legend()
 
+            plt.tight_layout()
             plt.show()
             plt.close()
 
