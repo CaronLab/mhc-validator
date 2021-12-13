@@ -38,7 +38,7 @@ import subprocess
 import matplotlib.backends.backend_pdf as plt_pdf
 from contextlib import nullcontext
 from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
-from deeplc import DeepLC
+# from deeplc import DeepLC
 from pyteomics.mzml import MzML
 from sklearn.base import TransformerMixin
 from hyperopt import fmin, tpe, hp, space_eval
@@ -47,6 +47,7 @@ from scipy.stats import pearsonr
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from matplotlib.cm import get_cmap
 from inspect import signature
+from sklearn import preprocessing
 
 deprecation._PRINT_DEPRECATION_WARNINGS = False
 
@@ -797,8 +798,9 @@ class MhcValidator:
                                             hidden_layers: int = 3,
                                             width_ratio: float = 3.0,
                                             convolutional_layers: int = 1,
-                                            convolution_filter_size: int = 4,
-                                            convolution_filter_stride: int = 3,
+                                            filter_size: int = 4,
+                                            n_filters: int = 12,
+                                            filter_stride: int = 3,
                                             n_encoded_sequence_features: int = 4,
                                             loss_fn=tf.losses.BinaryCrossentropy()):
         optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
@@ -807,13 +809,51 @@ class MhcValidator:
                                                 hidden_layers_after_convolutions=hidden_layers,
                                                 after_convolutions_width_ratio=width_ratio,
                                                 convolutional_layers=convolutional_layers,
-                                                conv_filter_size=convolution_filter_size,
-                                                conv_filter_stride=convolution_filter_stride,
+                                                filter_size=filter_size,
+                                                n_filters=n_filters,
+                                                filter_stride=filter_stride,
                                                 n_encoded_sequence_features=n_encoded_sequence_features
                                                 )
         model.compile(optimizer=optimizer, loss=loss_fn)
 
         return model
+
+    def get_stratification_labels(self, search_score_only: bool = False):
+
+        columns = [x for x in self.feature_matrix.columns if 'expect' in x.lower()]
+        if len(columns) > 1:
+            columns = [x for x in columns if 'ln' in x.lower()]
+        elif len(columns) == 0:
+            columns = [x for x in self.feature_matrix.columns if 'xcorr' in x.lower()]
+        column = columns[0]
+
+        search_qs = calculate_qs(self.feature_matrix.loc[:, column].values, self.labels,
+                                 higher_better='xcorr' in column.lower())
+
+        search_labels = (search_qs <= 0.05).astype(int)
+        labels = np.concatenate((np.array(self.labels)[:, np.newaxis], search_labels[:, np.newaxis]), axis=1)
+
+        if not search_score_only and 'netmhcpan' in ''.join(list(self.feature_matrix.columns)).lower()\
+                or 'mhcflurry' in ''.join(list(self.feature_matrix.columns)).lower():
+            if 'netmhcpan' in ''.join(list(self.feature_matrix.columns)).lower():
+                predictor = 'netmhcpan'
+                score = 'el_score'
+            else:
+                predictor = 'mhcflurry'
+                score = 'presentation'
+            mhc_columns = [x for x in self.feature_matrix.columns if predictor in x.lower() and
+                           score in x.lower()]
+            mhc_qs = np.ones((len(self.feature_matrix), len(mhc_columns)), dtype=float)
+            for i, c in enumerate(mhc_columns):
+                mhc_qs[:, i] = calculate_qs(self.feature_matrix.loc[:, c].values, self.labels, higher_better=True)
+            mhc_labels = (mhc_qs <= 0.05).astype(int)
+            mhc_labels = np.any(mhc_labels, axis=1).astype(int)
+            labels = np.concatenate((labels, mhc_labels), axis=1)
+
+        label_encoder = preprocessing.LabelEncoder()
+        labels = label_encoder.fit_transform([str(x) for x in labels])
+
+        return labels
 
     @staticmethod
     def _visualize_splits(k_fold_splits, split='train', ax=None):
@@ -841,11 +881,10 @@ class MhcValidator:
             additional_training_data_for_model=None,
             return_prediction_data_and_model: bool = False,
             n_splits: int = 3,
-            q_value_subset: float = 1.0,
-            features_for_subset: Union[List[str], str] = 'all',
-            subset_threshold: int = 1,
-            encode_peptide_sequences: bool = False,
-            weight_by_inverse_peptide_counts: bool = True,
+            #q_value_subset: float = 1.0,
+            #features_for_subset: Union[List[str], str] = 'all',
+            #subset_threshold: int = 1,
+            weight_by_inverse_peptide_counts: bool = False,
             visualize: bool = True,
             report_dir: Union[str, PathLike] = None,
             random_seed: int = None,
@@ -875,14 +914,13 @@ class MhcValidator:
         else:
             labels = alternate_labels
 
-        if encode_peptide_sequences:
-            all_data[['AA1', 'AA2', 'AA3', 'AAm-1', 'AAm', 'AAm+1', 'AA-3', 'AA-2', 'AA-1', 'odd_length']] = ''
-            peps = pd.Series(data=self.peptides)
-            all_data.iloc[:, -10:] = pd.DataFrame(peps.apply(self._simple_peptide_encoding).to_list())
-
         all_data = all_data.values
         peptides = self.peptides
 
+        # we might make the splits better if our stratification takes feature q-values into account.
+        # e.g. we calculate q-values for expect value and MHC predictions, and make sure we include good examples
+        # from each allele.
+        # stratification_labels = self.get_stratification_labels()
         skf = list(StratifiedKFold(n_splits=n_splits,
                                    random_state=random_seed,
                                    shuffle=True).split(all_data, labels))
@@ -898,7 +936,7 @@ class MhcValidator:
                 reset_weights(model)
             feature_matrix = deepcopy(all_data)
 
-            if q_value_subset < 1.:
+            '''if q_value_subset < 1.:
                 mask = self.get_qvalue_mask_from_features(X=feature_matrix[train_index],
                                                           y=labels[train_index],
                                                           cutoff=q_value_subset,
@@ -906,7 +944,8 @@ class MhcValidator:
                                                           features_to_use=features_for_subset,
                                                           verbosity=1)
             else:
-                mask = np.ones_like(labels[train_index], dtype=bool)
+                mask = np.ones_like(labels[train_index], dtype=bool)'''
+            mask = np.ones_like(labels[train_index], dtype=bool)  # just in case we implement the q-value subset again
 
             x_train = deepcopy(feature_matrix[train_index, :][mask])
             rnd_idx = RandomState(random_seed).choice(len(x_train), len(x_train), replace=False)
@@ -918,9 +957,6 @@ class MhcValidator:
             x_predict = input_scalar.transform(x_predict)
             feature_matrix = input_scalar.transform(feature_matrix)
 
-            # x_train = tfdf.keras.pd_dataframe_to_tf_dataset(x_train, label="Label", weight=weight)
-            # x_test = tfdf.keras.pd_dataframe_to_tf_dataset(x_test, label="Label")
-            # x = tfdf.keras.pd_dataframe_to_tf_dataset(feature_matrix, label='Label')
             x = deepcopy(feature_matrix)
             x_train = deepcopy(x_train)
             x_predict = deepcopy(x_predict)
@@ -1029,6 +1065,7 @@ class MhcValidator:
         pdf = plt_pdf.PdfPages(str(fig_pdf), keep_empty=False)
 
         fig = plt.figure(constrained_layout=True, figsize=(10, 10))
+        fig.suptitle(self.filename, fontsize=16)
         gs = GridSpec(12, 2, figure=fig)
 
         train = fig.add_subplot(gs[:4, 0])
@@ -1045,7 +1082,6 @@ class MhcValidator:
             dist = fig.add_subplot(gs[:6, 1])
             train_split = fig.add_subplot(gs[6:9, 1])
             val_split = fig.add_subplot(gs[9:, 1])
-        val_split.adjust(bottom=0)
 
         colormap = get_cmap("tab10")
 
@@ -1102,6 +1138,11 @@ class MhcValidator:
             pdf.savefig(fig)
         plt.close(fig)
         pdf.close()
+
+        self.raw_data['mhcv_peptide'] = self.peptides
+        self.raw_data['mhcv_prob'] = self.predictions
+        self.raw_data['mhcv_label'] = self.labels
+        self.raw_data['mhcv_q-value'] = self.qs
 
         if return_prediction_data_and_model:
             return output, {'predictions': deepcopy(self.predictions),
@@ -1561,159 +1602,6 @@ class MhcValidator:
         df = pd.DataFrame(columns=[f'gmmc@@{x}' for x in range(np.shape(preds)[1])], data=preds)
         self.feature_matrix.drop(columns=[x for x in self.feature_matrix.columns if 'gmmc@@' in x], inplace=True)
         self.feature_matrix = self.feature_matrix.join(df)
-
-    def train_peptide_encoder(self,
-                              epochs=20,
-                              validation_split=0.5,
-                              batch_size=64,
-                              n_encoded_features=3,
-                              learning_rate=0.001,
-                              dropout: float = 0.5,
-                              q_value_subset: float = 1.0,
-                              features_for_subset: Union[List[str], str] = 'all',
-                              subset_threshold: int = 1,
-                              random_seed: int = None,
-                              weight_by_peptide_counts: bool = True,
-                              label_smoothing: float = 0.0,
-                              visualize: bool = True,
-                              pdf_out: Union[str, PathLike] = None):
-
-        self._set_seed(random_seed)
-        encoder: keras.Model = peptide_sequence_encoder(max_pep_length=self.max_len,
-                                                        dropout=dropout,
-                                                        encoding_size=n_encoded_features)
-        #top_n_picker = pickTopPredictions(np.sum(self.labels == 1), np.sum(self.labels == 0), epochs)
-        #callbacks = [top_n_picker]
-        #loss_fn = sliding_bce(top_n_picker.top_n)
-
-        optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
-
-        loss_fn = tf.losses.BinaryCrossentropy(label_smoothing=label_smoothing)
-        encoder.compile(loss='binary_crossentropy', optimizer=optimizer)
-
-        self.prepare_data(validation_split=validation_split, stratification_dimensions=1,
-                          subset_by_feature_qvalue=(q_value_subset < 1),
-                          qvalue_cutoff=q_value_subset,
-                          n_features_to_meet_cutoff=subset_threshold
-                          )
-
-        if weight_by_peptide_counts:
-            peptide_counts = Counter(self.X_train_peps)
-            weights = np.array([1 / np.sqrt(peptide_counts[x]) for x in self.X_train_peps])
-        else:
-            weights = np.ones_like(self.y_train)
-
-        self.fit_history = encoder.fit(self.X_train_encoded_peps,
-                                       self.y_train,
-                                       validation_data=(self.X_val_encoded_peps, self.y_val),
-                                       epochs=epochs,
-                                       batch_size=batch_size,
-                                       use_multiprocessing=self.max_threads > 1,
-                                       workers=self.max_threads,
-                                       verbose=2,
-                                       sample_weight=weights)
-
-        if pdf_out is not None:
-            pdf = plt_pdf.PdfPages(pdf_out, False)
-
-        plt.plot(self.fit_history.history['loss'], label='Training')
-        plt.plot(self.fit_history.history['val_loss'], label='Validation')
-        plt.legend()
-        if visualize:
-            plt.show()
-        if pdf_out is not None:
-            pdf.savefig()
-        plt.close()
-
-        preds = encoder.predict(self.X_encoded_peps).flatten()
-        qs = calculate_qs(preds, self.labels)
-        train_preds = encoder.predict(self.X_train_encoded_peps).flatten()
-        val_preds = encoder.predict(self.X_val_encoded_peps).flatten()
-        train_qs = calculate_qs(train_preds, self.y_train)
-        val_qs = calculate_qs(val_preds, self.y_val)
-        self.pep_encoding_train_qs = train_qs
-        self.pep_encoding_test_qs = val_qs
-        self.pep_encoding_qs = qs
-
-        # These need to optionally not show the plot and save it to a PDF
-        hist1, _ = self.plot_histogram(train_preds,
-                            self.y_train,
-                            title='Training predictions',
-                            visualize=visualize,
-                            return_fig=True)
-        hist2, _ = self.plot_histogram(val_preds,
-                            self.y_val,
-                            title='Validation predictions',
-                            visualize=visualize,
-                            return_fig=True)
-        hist3, _ = self.plot_histogram(preds,
-                            self.y,
-                            title='All predictions',
-                            visualize=visualize,
-                            return_fig=True)
-
-        roc, _ = self.plot_roc(calculate_roc(qs, self.labels), visualize=visualize,
-                               return_fig=True)
-
-        train_roc = calculate_roc(train_qs, self.y_train,
-                                  qvalue_cutoff=0.05)
-        val_roc = calculate_roc(val_qs, self.y_val, qvalue_cutoff=0.05)
-        rocs, _ = self.compare_rocs(train_roc, val_roc, visualize=visualize,
-                                    return_fig=True)
-
-        if pdf_out is not None:
-            for fig in [hist1, hist2, hist3, roc, rocs]:
-                pdf.savefig(fig)
-            pdf.close()
-        plt.close('all')
-
-        print(f"Training target PSMs at 1% FDR: {np.sum((train_qs <= 0.01) & (self.y_train == 1))}")
-        print(f"Validation target PSMs at 1% FDR: {np.sum((val_qs <= 0.01) & (self.y_val == 1))}")
-        print(f"Target PSMs at 1% using peptide sequences alone: {np.sum((qs <= 0.01) & (self.y == 1))}")
-
-        model = keras.Model(inputs=encoder.input, outputs=encoder.get_layer('encoded_peptides').output)
-        encoded_peps = model.predict(self.X_encoded_peps)
-        shape = np.shape(encoded_peps)
-
-        return encoded_peps, train_qs, val_qs  # .reshape(shape[0], shape[1]*shape[2])
-
-    def add_peptide_encodings(self,
-                              epochs=20,
-                              validation_split=0.5,
-                              batch_size=64,
-                              n_encoded_features: int = 3,
-                              learning_rate=0.001,
-                              q_value_subset: float = 1.0,
-                              features_for_subset: Union[List[str], str] = 'all',
-                              subset_threshold: int = 1,
-                              dropout: float = 0.5,
-                              random_seed: int = None,
-                              weight_by_peptide_counts: bool = False,
-                              label_smoothing: float = 0.0,
-                              visualize: bool = True,
-                              pdf_out: Union[str, PathLike] = None,
-                              return_train_validation_qs: bool = False):
-
-        encoded_peps, train_qs, val_qs = self.train_peptide_encoder(epochs=epochs,
-                                                                    validation_split=validation_split,
-                                                                    batch_size=batch_size,
-                                                                    learning_rate=learning_rate,
-                                                                    dropout=dropout,
-                                                                    q_value_subset=q_value_subset,
-                                                                    features_for_subset=features_for_subset,
-                                                                    subset_threshold=subset_threshold,
-                                                                    random_seed=random_seed,
-                                                                    weight_by_peptide_counts=weight_by_peptide_counts,
-                                                                    n_encoded_features=n_encoded_features,
-                                                                    label_smoothing=label_smoothing,
-                                                                    visualize=visualize,
-                                                                    pdf_out=pdf_out)
-        df = pd.DataFrame(data=encoded_peps, columns=[f'mhcv_seq_encoding@@{x}' for x in range(np.shape(encoded_peps)[1])])
-        self.feature_matrix.drop(columns=[x for x in self.feature_matrix.columns
-                                          if 'mhcv_seq_encoding@@' in x], inplace=True)
-        self.feature_matrix = self.feature_matrix.join(df)
-        if return_train_validation_qs:
-            return train_qs, val_qs
 
     def filter_library(self,
                        filepath: Union[str, PathLike],

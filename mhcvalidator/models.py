@@ -83,13 +83,14 @@ def peptide_sequence_autoencoder(dropout: float = 0.6, max_pep_length: int = 15,
 
 
 def get_model_with_peptide_encoding(ms_feature_length: int, max_pep_length: int = 15, dropout: float = 0.6,
-                                    hidden_layers_after_convolutions: int = 3, convolutional_layers: int = 1, conv_filter_size: int = 12,
-                                    conv_filter_stride: int = 4, n_encoded_sequence_features: int = 4,
+                                    hidden_layers_after_convolutions: int = 3, convolutional_layers: int = 1,
+                                    filter_size: int = 4, n_filters: int = 12,
+                                    filter_stride: int = 4, n_encoded_sequence_features: int = 4,
                                     after_convolutions_width_ratio: float = 2):
     pep_input = keras.Input(shape=(max_pep_length, 21))
     p = layers.BatchNormalization(input_shape=(max_pep_length, 21))(pep_input)
     for i in range(convolutional_layers):
-        p = layers.Conv1D(conv_filter_size, conv_filter_stride, padding="valid", activation=tf.nn.tanh)(p)
+        p = layers.Conv1D(n_filters, filter_size, filter_stride, padding="valid", activation=tf.nn.tanh)(p)
         p = layers.MaxPool1D()(p)
     p = layers.Dropout(dropout)(p)
     p = layers.Flatten()(p)
