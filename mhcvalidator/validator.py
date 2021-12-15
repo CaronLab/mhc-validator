@@ -866,7 +866,7 @@ class MhcValidator:
         if x == 0:
             alpha = 0.1
         else:
-            alpha = 0.1 * (n_splits - 1)
+            alpha = min(1.0, 0.1 * (n_splits - 1))
 
         for i, split in enumerate(k_fold_splits):
             ax.vlines(split[x], i, i + 1, label=f'split {i + 1}',
