@@ -1043,10 +1043,6 @@ class MhcValidator:
 
             if report_vebosity > 0:
                 print(report)
-            #self.raw_data['mhcv_prob'] = list(self.predictions)
-            #self.raw_data['mhcv_q-value'] = list(self.qs)
-            #self.raw_data['mhcv_label'] = list(self.labels)
-            #self.raw_data['mhcv_peptide'] = list(self.peptides)
 
             results = {'train_preds': train_preds, 'train_labels': train_labels, 'train_qs': train_qs,
                            'train_roc': train_roc, 'predict_preds': predict_preds, 'predict_labels': predict_labels,
