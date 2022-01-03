@@ -32,7 +32,6 @@ from mhcvalidator.libraries import load_library, filter_library
 import tempfile
 from collections import Counter
 import tensorflow.python.util.deprecation as deprecation
-import tensorflow_decision_forests as tfdf
 from matplotlib.gridspec import GridSpec
 import subprocess
 import matplotlib.backends.backend_pdf as plt_pdf
@@ -44,30 +43,15 @@ from sklearn.base import TransformerMixin
 from hyperopt import fmin, tpe, hp, space_eval
 from hyperopt.pyll.base import scope
 from scipy.stats import pearsonr
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from matplotlib.cm import get_cmap
 from inspect import signature
 from sklearn import preprocessing
 
 deprecation._PRINT_DEPRECATION_WARNINGS = False
 
-
-@contextmanager
-def suppress_stdout_stderr():
-    """A context manager that redirects stdout and stderr to devnull"""
-    with open(devnull, 'w') as fnull:
-        with redirect_stderr(fnull) as err, redirect_stdout(fnull) as out:
-            yield (err, out)
-
 # This can be uncommented to prevent the GPU from getting used.
 # import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-
-# from scipy.stats import gmean as geom_mean
-
-# tf.config.threading.set_inter_op_parallelism_threads(0)
-# tf.config.threading.set_intra_op_parallelism_threads(0)
-# tf.config.set_soft_device_placement(enabled=True)
 
 DEFAULT_TEMP_MODEL_DIR = str(Path(tempfile.gettempdir()) / 'validator_models')
 
@@ -490,6 +474,7 @@ class MhcValidator:
     def add_mhcflurry_predictions(self):
         """
         Run MhcFlurry and add presentation predictions to the training feature matrix.
+
         :return: None
         """
         if self.alleles is None or self.mhc_class is None:
@@ -535,6 +520,7 @@ class MhcValidator:
     def add_netmhcpan_predictions(self, n_processes: int = 0):
         """
         Run NetMHCpan and add presentation predictions to the training feature matrix.
+
         :return: None
         """
         if self.alleles is None or self.mhc_class is None:
@@ -577,6 +563,7 @@ class MhcValidator:
     def add_all_available_predictions(self, verbose_errors: bool = False):
         """
         Try to run both MhcFlurry and NetMHCpan and add their predictions to the training features.
+
         :param verbose_errors:
         :return:
         """
@@ -724,39 +711,15 @@ class MhcValidator:
                       metrics=[global_accuracy])
         return model, model_name, callbacks_list
 
-    '''def _calculate_peptides_similarity(self):
-        n_targets = np.sum(self.y == 1)
-        n_decoys = np.sum(self.y == 0)
-
-        encoder = EncodableSequences(list(self.peptides))
-        padding = 'pad_middle' if self.mhc_class == 'I' else 'left_pad_right_pad'
-        encoded_peps = encoder.variable_length_to_fixed_length_vector_encoding('BLOSUM62',
-                                                                               max_length=self.max_len,
-                                                                               alignment_method=padding)
-
-        encoded_decoys = encoded_peps[self.y == 0]
-        encoded_targets = encoded_peps[self.y == 1]
-
-        summed_null_encoding = np.sum(encoded_decoys, axis=0)
-        summed_target_encoding = np.sum(encoded_targets, axis=0)
-
-        desired_target_encoding = (summed_target_encoding - summed_null_encoding) / (n_targets - n_decoys)
-        desired_target_encoding = (desired_target_encoding - np.min(desired_target_encoding)) / (np.max(desired_target_encoding) - np.min(desired_target_encoding))
-        def normalize(x):
-            x = x.flatten()
-            return (x-np.amin(x))/(np.amax(x)-np.amin(x)).flatten().reshape(1, -1)
-        similarity = np.array([euclidean(normalize(x), desired_target_encoding.reshape(1, -1)) for x in tqdm(encoded_peps)])'''
-
     @staticmethod
     def _simple_peptide_encoding(peptide: str):
-        odd = len(peptide) % 2
-        if len(peptide) == 9:
-            return list(peptide) + [odd]
-        elif len(peptide) == 8:
-            return list(peptide[:3] + ' ' + peptide[3:]) + [odd]
-        else:
-            middle = int(np.floor((len(peptide)) / 2))
-            return list(peptide[:3] + peptide[middle-1:middle+2] + peptide[-3:]) + [odd]
+        """
+        Return the first four and last four amino acids of the peptide sequence.
+
+        :param peptide: The peptide sequence.
+        :return:
+        """
+        return list(peptide[:4] + peptide[-4:])
 
     def get_gradient_boosted_tree_model(self,
                                         num_trees: int = 2000,
@@ -764,7 +727,18 @@ class MhcValidator:
                                         shrinkage: float = 0.05,
                                         tfdf_hyperparameter_template: str = 'benchmark_rank1',
                                         **kwargs):
+        """
+        Return a Tensorflow Decision Forest GradientBoostedTreesModel.
 
+        :param num_trees: The maximum number of trees in the forest.
+        :param max_depth: The depth of the forest.
+        :param shrinkage: Shrinkage. Sort of analogous to learning rate.
+        :param tfdf_hyperparameter_template: The name of a hyperparameter template to use. Default: benchmark_rank1
+        :param kwargs: Additional keyword arguments to pass to tfdf.keras.GradientBoostedTreesModel
+        :return: An instance of tfdf.keras.GradientBoostedTreesModel
+        """
+
+        import tensorflow_decision_forests as tfdf
         model = tfdf.keras.GradientBoostedTreesModel(num_trees=num_trees,
                                                      max_depth=max_depth,
                                                      shrinkage=shrinkage,
@@ -781,6 +755,16 @@ class MhcValidator:
                      width_ratio: float = 3.0,
                      loss_fn=tf.losses.BinaryCrossentropy()
                      ):
+        """
+        Return a compiled multilayer perceptron neural network with the indicated architecture.
+
+        :param learning_rate: Learning rate used by the optimizer (adam).
+        :param dropout: Dropout between each layer.
+        :param hidden_layers: Number of hidden layers.
+        :param width_ratio: Ratio of width of hidden layers to width of input layer.
+        :param loss_fn: The loss function to use.
+        :return: A compiled keras.Model
+        """
 
         optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
         model = get_model_without_peptide_encoding(self.feature_matrix.shape[1],
@@ -803,6 +787,22 @@ class MhcValidator:
                                             filter_stride: int = 3,
                                             n_encoded_sequence_features: int = 4,
                                             loss_fn=tf.losses.BinaryCrossentropy()):
+        """
+        Return a compiled neural network, similar to get_nn_model but also includes a convolutional network for
+        encoding peptide sequences which feeds into the multilayer perceptron.
+
+        :param learning_rate: Learning rate used by the optimizer (adam).
+        :param dropout:  Dropout between each layer.
+        :param hidden_layers: Number of hidden layers.
+        :param width_ratio: Ratio of width of hidden layers to width of input layer.
+        :param convolutional_layers: Number of convolutional layers.
+        :param filter_size: Convolution filter size.
+        :param n_filters: Number of filters.
+        :param filter_stride: Filter stride.
+        :param n_encoded_sequence_features: Number of nodes in the output of the convolutional network.
+        :param loss_fn: The loss function to use.
+        :return: A compiled keras.Model
+        """
         optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
         model = get_model_with_peptide_encoding(ms_feature_length=self.feature_matrix.shape[1],
                                                 dropout=dropout,
@@ -818,45 +818,18 @@ class MhcValidator:
 
         return model
 
-    def get_stratification_labels(self, search_score_only: bool = False):
-
-        columns = [x for x in self.feature_matrix.columns if 'expect' in x.lower()]
-        if len(columns) > 1:
-            columns = [x for x in columns if 'ln' in x.lower()]
-        elif len(columns) == 0:
-            columns = [x for x in self.feature_matrix.columns if 'xcorr' in x.lower()]
-        column = columns[0]
-
-        search_qs = calculate_qs(self.feature_matrix.loc[:, column].values, self.labels,
-                                 higher_better='xcorr' in column.lower())
-
-        search_labels = (search_qs <= 0.05).astype(int)
-        labels = np.concatenate((np.array(self.labels)[:, np.newaxis], search_labels[:, np.newaxis]), axis=1)
-
-        if not search_score_only and 'netmhcpan' in ''.join(list(self.feature_matrix.columns)).lower()\
-                or 'mhcflurry' in ''.join(list(self.feature_matrix.columns)).lower():
-            if 'netmhcpan' in ''.join(list(self.feature_matrix.columns)).lower():
-                predictor = 'netmhcpan'
-                score = 'el_score'
-            else:
-                predictor = 'mhcflurry'
-                score = 'presentation'
-            mhc_columns = [x for x in self.feature_matrix.columns if predictor in x.lower() and
-                           score in x.lower()]
-            mhc_qs = np.ones((len(self.feature_matrix), len(mhc_columns)), dtype=float)
-            for i, c in enumerate(mhc_columns):
-                mhc_qs[:, i] = calculate_qs(self.feature_matrix.loc[:, c].values, self.labels, higher_better=True)
-            mhc_labels = (mhc_qs <= 0.05).astype(int)
-            mhc_labels = np.any(mhc_labels, axis=1).astype(int)
-            labels = np.concatenate((labels, mhc_labels), axis=1)
-
-        label_encoder = preprocessing.LabelEncoder()
-        labels = label_encoder.fit_transform([str(x) for x in labels])
-
-        return labels
-
     @staticmethod
     def _visualize_splits(k_fold_splits, split='train', ax=None):
+        """
+        Visualize the distribution of examples between the k-fold splits.
+
+        :param k_fold_splits: The splits, as returned by scikit-learn StratifiedKFold.
+        :param split: Which split to visualize. If 'train', the training set will be visualized. Any other string
+        will visualize the validation set.
+        :param ax: Optional, a matplotlib axis object on which to plot.
+        :return: None
+        """
+
         if ax is None:
             fig, ax = plt.subplots()
         colors = get_cmap('tab10')
@@ -892,9 +865,42 @@ class MhcValidator:
             clear_session: bool = True,
             alternate_labels=None,
             initial_model_weights: str = None,
-            keep_best_loss: bool = True,
+            fit_model: bool = True,
             fig_pdf: Union[str, PathLike] = None,
             **kwargs):
+
+        """
+        Run the validation algorithm.
+
+        :param model: The model to train on the target/decoy data.
+        :param model_fit_function: The function which fits the model. Default is 'fit'.
+        :param model_predict_function: The function used to make predictions with the fitted model. Default is 'predict'.
+        :param post_prediction_fn: A function applied to the output of the predict function. Useful if the output is
+        multidimensional, as all downstream processes expect a probability between 0 and 1.
+        :param additional_training_data_for_model: Additional data for training the model. Only used if the model
+        expects two inputs. If you are using the provided neural network which encodes peptide sequences, then you must
+        pass self.X_encoded_peps.
+        :param return_prediction_data_and_model: Whether to return predictions, q-values, etc in a dictionary. This
+        data is available from the attributes of this MhcValidator instance after running, but it can be useful to
+        return the data if you will be manipulating it downstream.
+        :param n_splits: Number of splits used for training and validation/predicting (ala k-fold cross-validation).
+        :param weight_by_inverse_peptide_counts: Whether to weight training by inverse peptide counts (i.e. number of
+        times a sequence is identified in the data).
+        :param visualize: Visualize the results.
+        :param report_dir:
+        :param random_seed: Random seed used.
+        :param report_vebosity: Print summary if > 0, else run silently.
+        :param clear_session: Clear the Tensorflow session before running.
+        :param alternate_labels: Alternate labels to use for training. Possibly useful in an iterative variation of the
+        algorithm.
+        :param initial_model_weights: A file containing model weights to load before training using the models "load"
+        function, if it has one.
+        :param fit_model: Whether or not to fit the model. You would only set this to false if you were loading weights
+        from an already-fitted model.
+        :param fig_pdf: Filepath to save a PDF version of the training report.
+        :param kwargs: Additional keyword arguments passed to model fit function.
+        :return:
+        """
 
         if clear_session:
             K.clear_session()
@@ -995,7 +1001,10 @@ class MhcValidator:
             else:
                 weight_str = ''
 
-            fit_history = eval(f"model.{model_fit_function}(x_train, train_labels, {val_str} {weight_str} **kwargs)")
+            if fit_model:
+                fit_history = eval(f"model.{model_fit_function}(x_train, train_labels, {val_str} {weight_str} **kwargs)")
+            else:
+                fit_history = None
 
             if fit_history is not None and hasattr(fit_history, 'history'):
                 history.append(fit_history)
@@ -1614,204 +1623,6 @@ class MhcValidator:
         pout = Path(filepath).parent / (Path(filepath).stem + f'_{suffix}{Path(filepath).suffix}')
         filtered_lib.to_csv(pout, sep='\t')
 
-    def grid_search(self,
-                    batch_sizes: List[int] = (64, 128, 256, 512, 1028, 2056, 4112),
-                    epochs: List[int] = (15, 30, 60, 120),
-                    early_stopping_patiences: List[int] = (15,),
-                    learning_rates: List[float] = (0.001,),
-                    holdout_splits: List[float] = (0.25,),
-                    validation_splits: List[float] = (0.25,),
-                    hidden_layers=(3,),
-                    dropouts=(0.6,),
-                    output_dir: str = None,
-                    encode_peptide_sequences: bool = False,
-                    test_stratify_based_on_MHC_presentation: bool = True,
-                    visualize: bool = False,
-                    title: str = None):
-        """
-        Run a simple grid search of the following hyperparameters: batch_size, epochs, learning_rate, early
-        stopping patience. The training curves (loss and accuracy) are plotted for each, along with the number
-        of PSMs and unique peptides identified at 1% FDR. Note that using many values for each parameter will
-        result in a very long run time and generate many many plots. It is best to start with a coarse grid and
-        refine later.
-
-        :param dropouts:
-        :param title:
-        :param visualize:
-        :param test_stratify_based_on_MHC_presentation:
-        :param hidden_layers:
-        :param batch_sizes:
-        :param epochs:
-        :param early_stopping_patiences:
-        :param learning_rates:
-        :param holdout_splits:
-        :param validation_splits:
-        :param output_dir:
-        :param encode_peptide_sequences:
-        :return:
-        """
-
-        n_targets = np.sum(self.labels == 1)
-        n_decoys = np.sum(self.labels == 0)
-        max_accuracy = round((n_decoys + (n_targets - n_decoys)) / len(self.labels), 3)
-        theoretical_possible_targets = n_targets - n_decoys
-
-        import matplotlib.backends.backend_pdf as plt_pdf
-        if output_dir is None:
-            time = str(datetime.now()).replace(' ', '_').replace(':', '-')
-            pdf_file = f'/tmp/mhcvalidator_gridsearch_{time}.pdf'
-        else:
-            if not Path(output_dir).exists():
-                Path(output_dir).mkdir()
-            pdf_file = str(Path(output_dir) / 'mhcvalidator_gridsearch.pdf')
-
-        if test_stratify_based_on_MHC_presentation:
-            stratify = [True, False]
-        else:
-            stratify = [False]
-
-        total = len(batch_sizes) * len(epochs) * len(stratify) * len(early_stopping_patiences) * len(learning_rates) * \
-                len(validation_splits) * len(holdout_splits) * len(dropouts) * len(hidden_layers)
-        i = 1
-
-        print(f'Saving plots to {pdf_file}')
-
-        with plt_pdf.PdfPages(pdf_file) as pdf:
-            for learning_rate in learning_rates:
-                for max_epochs in epochs:
-                    for batch_size in batch_sizes:
-                        for validation_split in validation_splits:
-                            for holdout_split in holdout_splits:
-                                for early_stopping_patience in early_stopping_patiences:
-                                    for layers in hidden_layers:
-                                        for dropout in dropouts:
-                                            for test_stratify in stratify:
-                                                print(f'\nStep {i}/{total}'
-                                                      f' - epochs: {max_epochs}'
-                                                      f' - batch size: {batch_size}'
-                                                      f' - early stopping patience: {early_stopping_patience}'
-                                                      f' - holdout split: {holdout_split}'
-                                                      f' - validation split: {validation_split}'
-                                                      f' - learning rate: {learning_rate}')
-                                                print('Fitting model...')
-
-                                                i += 1
-                                                self.run(batch_size=batch_size,
-                                                         epochs=max_epochs,
-                                                         learning_rate=learning_rate,
-                                                         early_stopping_patience=early_stopping_patience,
-                                                         fit_verbosity=0,
-                                                         report_vebosity=0,
-                                                         visualize=False,
-                                                         encode_peptide_sequences=encode_peptide_sequences,
-                                                         validation_split=validation_split,
-                                                         holdout_split=holdout_split,
-                                                         dropout=dropout,
-                                                         hidden_layers=layers,
-                                                         stratify_based_on_MHC_presentation=test_stratify)
-
-                                                xs = range(1, len(self.fit_history.history['val_loss']) + 1)
-
-                                                val_loss = np.min(self.fit_history.history['val_loss'])
-                                                stopping_idx = self.fit_history.history['val_loss'].index(val_loss)
-
-                                                n_psms_01 = np.sum((self.qs <= 0.01) & (self.labels == 1))
-                                                n_uniqe_peps_01 = len(
-                                                    np.unique(self.peptides[(self.qs <= 0.01) & (self.labels == 1)]))
-
-                                                n_psms_05 = np.sum((self.qs <= 0.05) & (self.labels == 1))
-                                                n_uniqe_peps_05 = len(
-                                                    np.unique(self.peptides[(self.qs <= 0.05) & (self.labels == 1)]))
-
-                                                text = f'Estimated max possible target PSMs: {theoretical_possible_targets}\n' \
-                                                       f'  Target PSMs at 1% FDR: {n_psms_01}\n' \
-                                                       f'  Target peptides at 1% FDR: {n_uniqe_peps_01}\n' \
-                                                       f'  Target PSMs at 5% FDR: {n_psms_05}\n' \
-                                                       f'  Target peptides at 5% FDR: {n_uniqe_peps_05}\n\n' \
-                                                       f'Title: {title}\n' \
-                                                       f'  stratification based on MHC preds: {test_stratify}\n' \
-                                                       f'  epochs: {max_epochs}\n' \
-                                                       f'  batch size: {batch_size}\n' \
-                                                       f'  hidden layers: {layers}\n' \
-                                                       f'  dropout: {dropout}\n' \
-                                                       f'  early stopping patience: {early_stopping_patience}\n' \
-                                                       f'  holdout split: {holdout_split}\n' \
-                                                       f'  validation split: {validation_split}\n' \
-                                                       f'  learning rate: {learning_rate}'
-
-                                                fig, (ax, text_ax) = plt.subplots(2, 1, figsize=(8, 10))
-                                                text_ax.axis('off')
-
-                                                tl = ax.plot(xs, self.fit_history.history['loss'], c='#3987bc',
-                                                             label='Training loss')
-                                                vl = ax.plot(xs, self.fit_history.history['val_loss'], c='#ff851a',
-                                                             label='Validation loss')
-                                                ax.set_ylabel('Loss')
-                                                ax2 = ax.twinx()
-                                                ta = ax2.plot(xs, self.fit_history.history['global_accuracy'],
-                                                              c='#3987bc', label='Training accuracy', ls='--')
-                                                va = ax2.plot(xs, self.fit_history.history['val_global_accuracy'],
-                                                              c='#ff851a', label='Validation accuracy', ls='--')
-                                                ax2.set_ylabel('Accuracy (targets and decoys)')
-                                                ax.plot(range(1, max_epochs + 1), [val_loss] * max_epochs, ls=':',
-                                                        c='gray')
-                                                ma = ax2.plot(range(1, max_epochs + 1), [max_accuracy] * max_epochs,
-                                                              ls='-.', c='k', zorder=0,
-                                                              label='Predicted max accuracy')
-                                                bm = ax.plot(self.fit_history.history['val_loss'].index(val_loss) + 1,
-                                                             val_loss,
-                                                             marker='o', mec='red', mfc='none', ms='12', ls='none',
-                                                             label='best model')
-
-                                                lines = tl + vl + bm + ta + va + ma
-                                                labels = [l.get_label() for l in lines]
-                                                plt.legend(lines, labels, bbox_to_anchor=(0, -.12, 1, 0),
-                                                           loc='upper center',
-                                                           mode='expand', ncol=2)
-
-                                                ax.set_xlabel('Epoch')
-                                                ylim = ax.get_ylim()
-
-                                                ax.plot([stopping_idx + 1, stopping_idx + 1], [0, 1], ls=':', c='gray')
-                                                ax.set_ylim(ylim)
-                                                ax.set_xlim((1, max_epochs))
-                                                ax2.set_xlim((1, max_epochs))
-
-                                                text_ax.text(0, 0.1, text, transform=text_ax.transAxes, size=12)
-
-                                                plt.tight_layout()
-                                                if visualize:
-                                                    plt.show()
-
-                                                pdf.savefig(fig)
-                                                plt.close('all')
-
-                                                # if output_dir:
-                                                #    self.raw_data.to_csv(str(Path(output_dir) / f'{self.filename}_MhcV.txt'),
-                                                #                         index=False)
-
-    @staticmethod
-    def compare_rocs(train_roc,
-                     val_roc,
-                     title: str = "Comparison of training and validation ROCs",
-                     visualize: bool = True,
-                     return_fig: bool = True):
-
-        fig, ax = plt.subplots()
-        ax.plot(train_roc[0], train_roc[1], ls='-', lw=0.5, marker='.', label='Training predictions', c='#1F77B4')
-        ax.plot(val_roc[0], val_roc[1], ls='-', lw=0.5, marker='.', label='Validation predictions', c='#FF7F0F')
-        ax.legend()
-        plt.title(title)
-        ax.set_xlabel("FDR")
-        ax.set_ylabel("Number of PSMs")
-        fig.tight_layout()
-        if visualize:
-            fig.show()
-            plt.close(fig)
-            return None, None
-        if return_fig:
-            return fig, ax
-
     @staticmethod
     def plot_histogram(predictions,
                        labels,
@@ -1869,94 +1680,6 @@ class MhcValidator:
             plt.close()
             return None, None
 
-    def visualize_training(self,
-                           outdir: Union[str, PathLike] = None,
-                           log_yscale: bool = False,
-                           log_xscale: bool = True,
-                           save_only: bool = False,
-                           stopping_idx: int = None,
-                           plot_accuracy: bool = False):
-        if self.fit_history is None or self.X_test is None or self.y_test is None:
-            raise AttributeError("Model has not yet been trained. Use run to train.")
-        if outdir is not None:
-            if not Path(outdir).exists():
-                Path(outdir).mkdir(parents=True)
-
-        self.plot_histogram(self.training_predictions, self.y_train, 'Predictions for training data', log_xscale, log_yscale)
-        self.plot_histogram(self.validation_predictions, self.y_val, 'Predictions for validation data', log_xscale, log_yscale)
-        self.plot_histogram(self.testing_predictions, self.y_test, 'Predictions for testing data', log_xscale, log_yscale)
-        self.plot_histogram(self.predictions, self.y, 'Predictions for all data', log_xscale, log_yscale)
-
-        qs = self.roc[0][self.roc[0] <= 0.05]
-        response = self.roc[1][self.roc[0] <= 0.05]
-        plt.plot(qs, response, ls='none', marker='.', ms=1)
-        plt.xlim((0, 0.05))
-        plt.xlabel('FDR')
-        plt.ylabel('Number of PSMs')
-        plt.title('ROC')
-        if outdir is not None:
-            plt.savefig(str(Path(outdir, 'ROC.svg')))
-        if not save_only:
-            plt.show()
-        plt.clf()
-
-        n_targets = np.sum(self.labels == 1)
-        n_decoys = np.sum(self.labels == 0)
-        max_accuracy = round((n_decoys + (n_targets - n_decoys)) / len(self.labels), 3)
-
-        n_epochs = len(self.fit_history.epoch)
-
-        xs = range(1, len(self.fit_history.history['val_loss']) + 1)
-
-        val_loss = np.min(self.fit_history.history['val_loss'])
-        if stopping_idx is None:
-            stopping_idx = self.fit_history.history['val_loss'].index(val_loss)
-        n_psms = np.sum((self.qs <= 0.01) & (self.labels == 1))
-        n_uniqe_peps = len(np.unique(self.peptides[(self.qs <= 0.01) & (self.labels == 1)]))
-
-        fig, ax = plt.subplots()
-
-        tl = ax.plot(xs, self.fit_history.history['loss'], c='#3987bc', label='Training loss')
-        vl = ax.plot(xs, self.fit_history.history['val_loss'], c='#ff851a', label='Validation loss')
-        ax.set_ylabel('Loss')
-        if plot_accuracy:
-            ax2 = ax.twinx()
-            ta = ax2.plot(xs, self.fit_history.history['global_accuracy'], c='#3987bc', label='Training accuracy',
-                          ls='--')
-            va = ax2.plot(xs, self.fit_history.history['val_global_accuracy'], c='#ff851a', label='Validation accuracy',
-                          ls='--')
-            ax2.set_ylabel('Global accuracy (targets and decoys)')
-            ax.plot(xs, [val_loss] * n_epochs, ls=':', c='gray')
-            ma = ax2.plot(xs, [max_accuracy] * n_epochs, ls='-.', c='k', zorder=0,
-                          label='Predicted max accuracy')
-            ax2.set_xlim((1, n_epochs))
-
-        bm = ax.plot(stopping_idx + 1, val_loss,
-                     marker='o', mec='red', mfc='none', ms='12', ls='none', label='best model')
-        if plot_accuracy:
-            lines = tl + vl + bm + ta + va + ma
-        else:
-            lines = tl + vl + bm
-        labels = [l.get_label() for l in lines]
-        plt.legend(lines, labels, bbox_to_anchor=(0, -.12, 1, 0), loc='upper center',
-                   mode='expand', ncol=2)
-
-        ax.set_xlabel('Epoch')
-        ylim = ax.get_ylim()
-
-        ax.plot([stopping_idx + 1, stopping_idx + 1], [0, 1], ls=':', c='gray')
-        ax.set_ylim(ylim)
-        ax.set_xlim((1, n_epochs))
-        ax.set_title(f'Training curves\n#PSMs={n_psms} - #Peptides={n_uniqe_peps}')
-        plt.tight_layout()
-        if outdir is not None:
-            plt.savefig(str(Path(outdir, 'training_history.svg')))
-        if not save_only:
-            plt.show()
-        plt.clf()
-
-        plt.close('all')
-
     def write_table(self, filename: Union[str, PathLike] = None):
         if self.predictions is None or self.model is None:
             raise RuntimeError("The model must be trained first.")
@@ -1972,5 +1695,5 @@ class MhcValidator:
         plt.xlim((0, q_cutoff))
         plt.show()'''
 
-    def get_peptide_list(self, fdr: float, label: int = 1):
+    def get_peptide_list_at_fdr(self, fdr: float, label: int = 1):
         return self.peptides[(self.qs <= fdr) & (self.labels == label)]
