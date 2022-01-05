@@ -751,8 +751,8 @@ class MhcValidator:
     def get_nn_model(self,
                      learning_rate: float = 0.001,
                      dropout: float = 0.5,
-                     hidden_layers: int = 3,
-                     width_ratio: float = 3.0,
+                     hidden_layers: int = 2,
+                     width_ratio: float = 5.0,
                      loss_fn=tf.losses.BinaryCrossentropy()
                      ):
         """
@@ -779,13 +779,13 @@ class MhcValidator:
     def get_nn_model_with_sequence_encoding(self,
                                             learning_rate: float = 0.001,
                                             dropout: float = 0.5,
-                                            hidden_layers: int = 3,
-                                            width_ratio: float = 3.0,
+                                            hidden_layers: int = 2,
+                                            width_ratio: float = 5.0,
                                             convolutional_layers: int = 1,
                                             filter_size: int = 4,
                                             n_filters: int = 12,
                                             filter_stride: int = 3,
-                                            n_encoded_sequence_features: int = 4,
+                                            n_encoded_sequence_features: int = 6,
                                             loss_fn=tf.losses.BinaryCrossentropy()):
         """
         Return a compiled neural network, similar to get_nn_model but also includes a convolutional network for
@@ -911,6 +911,16 @@ class MhcValidator:
 
         if initial_model_weights is not None:
             model.load(initial_model_weights)
+
+        # check if the model is a Keras model, and if so check if number of epochs and batch size have been specified.
+        # If they haven't set them to default values of 30 and 512, respectively. Otherwise things will go poorly.
+        if isinstance(model, keras.Model):
+            if 'epochs' not in kwargs.keys():
+                print('`epochs` was not passed as a keyword argument. Setting it to default value of 30')
+                kwargs['epochs'] = 30
+            if 'batch_size' not in kwargs.keys():
+                print('`batch_size` was not passed as a keyword argument. Setting it to default value of 512')
+                kwargs['batch_size'] = 512
 
         # prepare data for training
         all_data = self.feature_matrix.copy(deep=True)
@@ -1109,8 +1119,8 @@ class MhcValidator:
             train.plot(*r['train_roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
             val.plot(*r['predict_roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
         final.plot(*self.roc, c=colormap(0), ms='3', ls='none', marker='.', alpha=0.6)
-        dist.hist(self.predictions[self.labels == 1], label='Target', bins=30, alpha=0.5, color='g')
-        dist.hist(self.predictions[self.labels == 0], label='Decoy', bins=30, alpha=0.5, zorder=100, color='r')
+        _, bins, _ = dist.hist(self.predictions[self.labels == 1], label='Target', bins=30, alpha=0.5, color='g')
+        dist.hist(self.predictions[self.labels == 0], label='Decoy', bins=bins, alpha=0.5, zorder=100, color='r')
 
         train.set_xlim((0, 0.05))
         val.set_xlim((0, 0.05))
