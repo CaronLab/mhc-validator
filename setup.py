@@ -10,6 +10,5 @@ setup(
     author_email='',
     description='',
     install_requires=['mhcflurry', 'mhcnames', 'tensorflow', 'scikit-learn', 'pandas', 'numpy', 'tqdm', 'pyteomics',
-                      'matplotlib', 'lxml', 'tensorflow-probability', 'tensorflow_decision_forests',
-                      'hyperopt']
+                      'matplotlib', 'lxml', 'tensorflow-probability', 'hyperopt']
 )
