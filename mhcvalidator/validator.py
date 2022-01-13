@@ -1129,14 +1129,17 @@ class MhcValidator:
         train.set_title('Training data')
         train.set_xlabel('q-value')
         train.set_ylabel('PSMs')
+        train.set_ylim((0, train.get_ylim()[1]))
 
         val.set_title('Validation data')
         val.set_xlabel('q-value')
         val.set_ylabel('PSMs')
+        val.set_ylim((0, val.get_ylim()[1]))
 
         final.set_title('Final q-values')
         final.set_xlabel('q-value')
         final.set_ylabel('PSMs')
+        final.set_ylim((0, final.get_ylim()[1]))
 
         dist.set_title('Prediction distributions')
         dist.set_xlabel('Target probability')
