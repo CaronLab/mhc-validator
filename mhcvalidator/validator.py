@@ -18,6 +18,7 @@ from mhcvalidator.predictions_parsers import format_mhcflurry_predictions_datafr
 from mhcvalidator.netmhcpan_helper import NetMHCpanHelper, format_class_II_allele
 from mhcvalidator.losses_and_metrics import global_accuracy, n_psms_at_1percent_fdr
 from mhcvalidator.fdr import calculate_qs, calculate_peptide_level_qs, calculate_roc
+from mhcvalidator.callbacks import MonitorPSMsAtFDR
 import matplotlib.pyplot as plt
 from mhcflurry.encodable_sequences import EncodableSequences
 from mhcvalidator.models import get_model_without_peptide_encoding, get_model_with_peptide_encoding, peptide_sequence_encoder, peptide_sequence_autoencoder
@@ -768,7 +769,7 @@ class MhcValidator:
                                                    hidden_layers=hidden_layers,
                                                    max_pep_length=self.max_len,
                                                    width_ratio=width_ratio)
-        model.compile(loss=loss_fn, optimizer=optimizer, metrics=[n_psms_at_1percent_fdr],
+        model.compile(loss=loss_fn, optimizer=optimizer,
                       run_eagerly=True)
 
         return model
@@ -811,7 +812,7 @@ class MhcValidator:
                                                 filter_stride=filter_stride,
                                                 n_encoded_sequence_features=n_encoded_sequence_features
                                                 )
-        model.compile(optimizer=optimizer, loss=loss_fn, metrics=[n_psms_at_1percent_fdr])
+        model.compile(optimizer=optimizer, loss=loss_fn)
 
         return model
 
@@ -851,6 +852,7 @@ class MhcValidator:
             additional_training_data_for_model=None,
             return_prediction_data_and_model: bool = False,
             n_splits: int = 3,
+            early_stopping_patience: int = 15,
             #q_value_subset: float = 1.0,
             #features_for_subset: Union[List[str], str] = 'all',
             #subset_threshold: int = 1,
@@ -1008,8 +1010,29 @@ class MhcValidator:
             else:
                 weight_str = ''
 
+            if isinstance(model, keras.Model):
+                early_stopping = keras.callbacks.EarlyStopping(
+                    monitor="val_loss",
+                    patience=early_stopping_patience,
+                    verbose=1,
+                    mode="auto",
+                    restore_best_weights=False)
+                now = str(datetime.now()).replace(' ', '_').replace(':', '-')
+                model_name = str(self.model_dir / f'mhcvalidator_{now}.h5')
+                checkpoint = keras.callbacks.ModelCheckpoint(model_name,
+                                                             monitor='val_loss', verbose=0,
+                                                             save_best_only=True, mode='min')
+                callbacks_str = 'callbacks=[early_stopping, checkpoint],'
+            else:
+                callbacks_str = ''
+                model_name = ''
+
+
             if fit_model:
-                fit_history = eval(f"model.{model_fit_function}(x_train, train_labels, {val_str} {weight_str} **kwargs)")
+                fit_history = eval(f"model.{model_fit_function}(x_train, train_labels, "
+                                   f"{val_str} {weight_str} {callbacks_str} **kwargs)")
+                if model_name != '':
+                    model.load_weights(model_name)
             else:
                 fit_history = None
 
@@ -1105,12 +1128,18 @@ class MhcValidator:
         val_split.set_xlabel('Scan number')
 
         if loss:
-            xs = range(1, len(history[0].history['val_loss']) + 1)
+            min_x = []
+            min_y = []
             for i, h in enumerate(history):
-                loss.plot(xs, h.history['val_loss'], c=colormap(i), marker=None, label=f'split {i+1}')
+                loss.plot(range(1, len(h.history['val_loss']) + 1),
+                          h.history['val_loss'], c=colormap(i), marker=None, label=f'split {i+1}')
+                min_y.append(np.min(h.history['val_loss']))
+                min_x.append(np.argmin(h.history['val_loss']) + 1)
+            loss.plot(min_x, min_y, ls='none', marker='x', ms='12', c='k', label='best models')
             loss.set_title('Validation loss')
             loss.set_xlabel('Epoch')
             loss.set_ylabel('Loss')
+            loss.legend()
 
         for i, r in enumerate(output):
             train.plot(*r['train_roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
