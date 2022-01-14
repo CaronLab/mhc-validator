@@ -13,7 +13,7 @@ from mhcvalidator.data_loaders import load_file, load_pout_data
 from mhcvalidator.features import prepare_features, eliminate_common_peptides_between_sets
 from mhcvalidator.predictions_parsers import add_mhcflurry_to_feature_matrix, add_netmhcpan_to_feature_matrix
 from mhcvalidator.netmhcpan_helper import NetMHCpanHelper, format_class_II_allele
-from mhcvalidator.losses_and_metrics import i_dunno_bce, global_accuracy, total_fdr, loss_coteaching
+from mhcvalidator.losses_and_metrics import i_dunno_bce, global_accuracy, loss_coteaching
 from mhcvalidator.fdr import calculate_qs, calculate_peptide_level_qs, calculate_roc
 import matplotlib.pyplot as plt
 from mhcflurry.encodable_sequences import EncodableSequences

@@ -3,7 +3,7 @@ import tensorflow_probability as tfp
 import tensorflow.keras as keras
 from tensorflow.keras import backend as K
 import numpy as np
-from mhcvalidator.fdr import calculate_qs
+from mhcvalidator.fdr import calculate_tensor_qs
 
 
 class pickTopPredictions(keras.callbacks.Callback):
@@ -95,13 +95,6 @@ def global_accuracy(y_true, y_pred):
     return acc
 
 
-def total_fdr(y_true, y_pred):
-    y_pred_labels = tf.round(y_pred)
-    false_positives = tf.reduce_sum(tf.math.abs(y_true - 1.) * y_pred_labels)
-    true_positives = tf.reduce_sum(y_true * y_pred_labels)
-    return false_positives / (false_positives + true_positives)
-
-
 def recall_m(y_true, y_pred):
     true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
     possible_positives = K.sum(K.round(K.clip(y_true, 0, 1)))
@@ -123,7 +116,7 @@ def f1_m(y_true, y_pred):
 
 
 def n_psms_at_1percent_fdr(y_true, y_pred):
-    qs = calculate_qs(y_pred, y_true, higher_better=True)
+    qs = calculate_tensor_qs(y_pred, y_true, higher_better=True)
     n_decoys = np.sum((qs <= 0.01) & (y_true == 0))
     n_targets = np.sum((qs <= 0.01) & (y_true == 1))
 

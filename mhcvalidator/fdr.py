@@ -1,5 +1,96 @@
 import numpy as np
 from collections import Counter
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import backend as K
+
+
+'''def calculate_tensor_qs(metrics: tf.Tensor, labels: tf.Tensor, higher_better: bool = True):
+
+    ordered_idx = tf.argsort(metrics)
+    sorted_metrics = tf.gather(metrics, ordered_idx)
+    sorted_labels = tf.gather(labels, ordered_idx)
+    if not higher_better:
+        sorted_metrics = tf.reverse(sorted_metrics)
+        sorted_labels = tf.reverse(sorted_labels)
+        ordered_idx = tf.reverse(ordered_idx)
+
+    target_counts = Counter(metrics[labels == 1])
+    decoy_counts = Counter(metrics[labels == 0])
+    for key, value in decoy_counts.items():
+        if key not in target_counts:
+            target_counts[key] = 0
+    for key, value in target_counts.items():
+        if key not in decoy_counts:
+            decoy_counts[key] = 0
+
+    qs = np.ones_like(metrics, dtype=float)
+    N_targets = np.sum(labels == 1)
+    N_decoys = np.sum(labels == 0)
+
+    for i in range(len(sorted_metrics)):
+        if i == len(sorted_metrics) - 1:
+            if sorted_labels[i] == 1:
+                qs[ordered_idx[i]] = 0
+            else:
+                qs[ordered_idx[i]] = 1
+            continue
+        qs[ordered_idx[i]] = N_decoys / N_targets
+
+        if sorted_metrics[i+1] != sorted_metrics[i]:
+            N_targets -= target_counts[sorted_metrics[i]]
+            N_decoys -= decoy_counts[sorted_metrics[i]]
+
+    #if not higher_better:
+    #    return np.flip(qs)
+    #else:
+    #    return qs
+    return qs'''
+
+
+def calculate_tensor_qs(metrics: tf.Tensor, labels: tf.Tensor, higher_better: bool = True):
+    with tf.compat.v1.Session().as_default():
+        metrics = metrics.numpy()
+        labels = labels.numpy()
+    ordered_idx = np.argsort(metrics)
+    sorted_metrics = metrics[ordered_idx]
+    sorted_labels = labels[ordered_idx]
+    if not higher_better:
+        sorted_metrics = np.flip(sorted_metrics)
+        sorted_labels = np.flip(sorted_labels)
+        ordered_idx = np.flip(ordered_idx)
+
+    target_counts = Counter(metrics[labels == 1])
+    decoy_counts = Counter(metrics[labels == 0])
+    for key, value in decoy_counts.items():
+        if key not in target_counts:
+            target_counts[key] = 0
+    for key, value in target_counts.items():
+        if key not in decoy_counts:
+            decoy_counts[key] = 0
+
+    qs = np.ones_like(metrics, dtype=float)
+    N_targets = np.sum(labels == 1)
+    N_decoys = np.sum(labels == 0)
+
+    for i in range(len(sorted_metrics)):
+        if i == len(sorted_metrics) - 1:
+            if sorted_labels[i] == 1:
+                qs[ordered_idx[i]] = 0
+            else:
+                qs[ordered_idx[i]] = 1
+            continue
+        qs[ordered_idx[i]] = N_decoys / N_targets
+
+        if sorted_metrics[i+1] != sorted_metrics[i]:
+            N_targets -= target_counts[sorted_metrics[i]]
+            N_decoys -= decoy_counts[sorted_metrics[i]]
+
+    #if not higher_better:
+    #    return np.flip(qs)
+    #else:
+    #    return qs
+    return qs
 
 
 def calculate_qs(metrics, labels, higher_better: bool = True):

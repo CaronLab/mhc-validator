@@ -16,7 +16,7 @@ from mhcvalidator.features import prepare_features, eliminate_common_peptides_be
 from mhcvalidator.predictions_parsers import add_mhcflurry_to_feature_matrix, add_netmhcpan_to_feature_matrix
 from mhcvalidator.predictions_parsers import format_mhcflurry_predictions_dataframe, format_netmhcpan_prediction_dataframe
 from mhcvalidator.netmhcpan_helper import NetMHCpanHelper, format_class_II_allele
-from mhcvalidator.losses_and_metrics import i_dunno_bce, global_accuracy, pickTopPredictions, sliding_bce
+from mhcvalidator.losses_and_metrics import global_accuracy, n_psms_at_1percent_fdr
 from mhcvalidator.fdr import calculate_qs, calculate_peptide_level_qs, calculate_roc
 import matplotlib.pyplot as plt
 from mhcflurry.encodable_sequences import EncodableSequences
@@ -135,10 +135,6 @@ class MhcValidator:
         self.min_len: int = 5
         self.max_len: int = 100
         self.model_dir = Path(model_dir)
-        self.mhcflurry_graph = tf.Graph()
-        self.mhcflurry_session = tf.compat.v1.Session(graph=self.mhcflurry_graph)
-        self.tfdf_graph = tf.Graph()
-        self.tfdf_session = tf.compat.v1.Session(graph=self.tfdf_graph)
         self._mhcflurry_predictions: bool = False
         self._netmhcpan_predictions: bool = False
         self.mhcflurry_predictions: pd.DataFrame = None
@@ -772,7 +768,8 @@ class MhcValidator:
                                                    hidden_layers=hidden_layers,
                                                    max_pep_length=self.max_len,
                                                    width_ratio=width_ratio)
-        model.compile(loss=loss_fn, optimizer=optimizer)
+        model.compile(loss=loss_fn, optimizer=optimizer, metrics=[n_psms_at_1percent_fdr],
+                      run_eagerly=True)
 
         return model
 
@@ -814,7 +811,7 @@ class MhcValidator:
                                                 filter_stride=filter_stride,
                                                 n_encoded_sequence_features=n_encoded_sequence_features
                                                 )
-        model.compile(optimizer=optimizer, loss=loss_fn)
+        model.compile(optimizer=optimizer, loss=loss_fn, metrics=[n_psms_at_1percent_fdr])
 
         return model
 
