@@ -945,10 +945,17 @@ class MhcValidator:
         output = []
         history = []
 
+        if isinstance(model, keras.Model):
+            now = str(datetime.now()).replace(' ', '_').replace(':', '-')
+            initial_model_weights = str(self.model_dir / f'mhcvalidator_initial_weights_{now}.h5')
+            model.save(initial_model_weights)
+        else:
+            initial_model_weights = ''
+
         for train_index, predict_index in skf:
-            #self._set_seed(random_seed=random_seed)
+            self._set_seed(random_seed)
             if isinstance(model, keras.Model):
-                reset_weights(model)
+                model.load_weights(initial_model_weights)
             feature_matrix = deepcopy(all_data)
 
             '''if q_value_subset < 1.:
