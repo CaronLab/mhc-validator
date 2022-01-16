@@ -852,7 +852,7 @@ class MhcValidator:
             additional_training_data_for_model=None,
             return_prediction_data_and_model: bool = False,
             n_splits: int = 3,
-            early_stopping_patience: int = 15,
+            early_stopping_patience: int = 10,
             #q_value_subset: float = 1.0,
             #features_for_subset: Union[List[str], str] = 'all',
             #subset_threshold: int = 1,
