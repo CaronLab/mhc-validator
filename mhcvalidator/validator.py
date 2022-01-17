@@ -147,7 +147,6 @@ class MhcValidator:
         else:
             self.max_threads: int = max_threads
 
-
     def set_mhc_params(self,
                        alleles: Union[str, List[str]] = ('HLA-A0201', 'HLA-B0702', 'HLA-C0702'),
                        mhc_class: str = 'I') -> None:
@@ -162,19 +161,22 @@ class MhcValidator:
             alleles = alleles
         assert mhc_class in ['I', 'II']
         assert len(alleles) >= 1
-        self.alleles = [normalize_allele_name(a).replace('*', '').replace(':', '') for a in alleles]
-        self.mhc_class = mhc_class
-        if self.mhc_class == 'I':
-            self.min_len = 8
-            self.max_len = 15
-        else:
-            self.min_len = 9
-            self.max_len = 30
+        if alleles:
+            self.alleles = [normalize_allele_name(a).replace('*', '').replace(':', '') for a in alleles]
+        if mhc_class:
+            self.mhc_class = mhc_class
+            if self.mhc_class == 'I':
+                self.min_len = 8
+                self.max_len = 15
+            else:
+                self.min_len = 9
+                self.max_len = 30
 
     def load_data(self,
                   filepath: Union[str, PathLike],
                   filetype='auto',
                   decoy_tag='rev_',
+                  peptide_column: str = None,
                   protein_column: str = None,
                   tag_is_prefix: bool = True,
                   file_delimiter: str = '\t',
