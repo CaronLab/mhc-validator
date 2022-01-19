@@ -146,10 +146,8 @@ class NetMHCpanHelper:
         self.alleles = alleles
         if mhc_class == 'I':
             self.min_length = 8
-            self.max_length = 15
         else:
             self.min_length = 9
-            self.max_length = 30
         self.peptides = []
         if peptides is not None:
             self.add_peptides(peptides)
@@ -181,8 +179,6 @@ class NetMHCpanHelper:
         for p in peptides:
             if len(p) < self.min_length:
                 raise ValueError(f"One or more peptides is shorter than the minimum length of {self.min_length} mers")
-            if len(p) > self.max_length:
-                raise ValueError(f"One or more peptides is longer than the maximum length of {self.max_length} mers")
         self.peptides += peptides
 
         self.netmhcpan_peptides = create_netmhcpan_peptide_index(self.peptides)
