@@ -70,7 +70,7 @@ def load_tabular_data(filepath: Union[str, Path],
 def load_spectromine_data(filepath: Union[str, Path],
                           sep='\t'):
     """
-    Loads a tabular file into a Pandas DataFrame. If there are ragged entries (i.e. not all row
+    NOT CURRENTLY USED. Loads a tabular file into a Pandas DataFrame. If there are ragged entries (i.e. not all row
     lengths are the same), then it is assumed the last column is proteins any ragged entries are joined
     with the special separator '@@' (chosen because it is extremely unlikely that
     we will ever encounter such a string in a FASTA file by chance.)
@@ -117,17 +117,6 @@ def load_pin_data(filepath: Union[str, Path],
     Label column is incorrect.
     :return: A Pandas DataFrame containing the loaded data
     """
-    if not isinstance(tag_is_prefix, bool):
-        raise TypeError('tag_is_prefix must be a boolean')
-    if not isinstance(decoy_tag, str):
-        raise TypeError('decoy_tag must be a string')
-
-    if tag_is_prefix:
-        def is_decoy(x):
-            return x.startswith(decoy_tag)
-    else:
-        def is_decoy(x):
-            return x.endswith(decoy_tag)
 
     df = load_tabular_data(filepath, id_column='SpecId')
     if len(df['Label'].unique()) == 2:
@@ -142,6 +131,14 @@ def load_pin_data(filepath: Union[str, Path],
               f'  Protein ID column: {protein_column}\n'
               f'  Decoy tag: {decoy_tag}\n'
               f'  Decoy tag is a prefix: {tag_is_prefix}')
+
+        if tag_is_prefix:
+            def is_decoy(x):
+                return x.startswith(decoy_tag)
+        else:
+            def is_decoy(x):
+                return x.endswith(decoy_tag)
+
         if protein_column is None or decoy_tag is None or not isinstance(tag_is_prefix, bool):
             raise ValueError('One or more required arguments are missing to extract target/decoy labels from the '
                              'protein ID column. "protein_column", "decoy_tag" and "tag_is_prefix" must all be '
@@ -301,6 +298,14 @@ def load_mzid_data(filepath: Union[str, Path],
                    decoy_prefix: str = 'rev_',
                    prot_column: str = 'protein description',
                    extract_label_func: callable = None):
+    """
+    Not currently used.
+    :param filepath:
+    :param decoy_prefix:
+    :param prot_column:
+    :param extract_label_func:
+    :return:
+    """
     df = mzid.DataFrame(filepath)
     before = len(df)
     df.dropna(axis=0, subset=['PeptideSequence', prot_column], inplace=True)
@@ -374,9 +379,9 @@ def load_file(filename: Union[str, PathLike],
     :param file_sep:
     :return:
     """
-    if filetype not in ['pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine']:
+    if filetype not in ['pin', 'pepxml', 'tabular', 'tandem']:
         raise ValueError("filetype must be one of "
-                         "{'auto', 'pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine'}")
+                         "{'auto', 'pin', 'pepxml', 'tabular', 'tandem'}")
 
     if filetype == 'pin':
         df = load_pin_data(filename, decoy_tag=decoy_tag, protein_column=protein_column, tag_is_prefix=tag_is_prefix)
@@ -384,18 +389,12 @@ def load_file(filename: Union[str, PathLike],
     elif filetype == 'pepxml':
         df = load_pepxml_data(filename, decoy_prefix=decoy_tag)
         pep_col = 'peptide' if 'peptide' in df else 'Peptide'
-    elif filetype == 'mzid':
-        df = load_mzid_data(filename, decoy_prefix=decoy_tag)
-        pep_col = 'PeptideSequence'
     elif filetype == 'tandem':
         df = load_tandem_data(filename, decoy_prefix=decoy_tag)
         pep_col = 'peptide' if 'peptide' in df else 'Peptide'
-    elif filetype == 'spectromine':
-        df = load_spectromine_data(filename)
-        pep_col = 'PEP.StrippedSequence'
     else:
-        if not protein_column:
-            raise ValueError("the protein_column argument must be specified for arbitrary tabular data.")
+        if not (protein_column and decoy_tag):
+            raise ValueError("the protein_column and decoy_tag arguments must be specified for arbitrary tabular data.")
         df = load_tabular_data(filename, protein_column=protein_column, decoy_prefix=decoy_tag, sep=file_sep)
         pep_col = 'peptide' if 'peptide' in df else 'Peptide'
 

@@ -56,6 +56,7 @@ def format_mhcflurry_predictions_dataframe(mhcflurry_predictions: pd.DataFrame,
     """
 
     predictions = pd.DataFrame()
+    predictions['Peptide'] = np.array(peptide_list)
     if from_file:
         alleles = list(mhcflurry_predictions.loc[:, 'allele'].unique())
         for allele in alleles:
@@ -83,7 +84,8 @@ def format_mhcflurry_predictions_dataframe(mhcflurry_predictions: pd.DataFrame,
     return predictions
 
 
-def add_netmhcpan_to_feature_matrix(feature_matrix: pd.DataFrame, netmhcpan_predictions: pd.DataFrame) -> pd.DataFrame:
+def add_netmhcpan_to_feature_matrix(feature_matrix: pd.DataFrame,
+                                    netmhcpan_predictions: pd.DataFrame) -> pd.DataFrame:
     """
     Add features from netmhcpan_predictions to feature_matrix. Affinity predictions added as log values.
     All non-log value clipped to a minimum of 1e-7.
@@ -104,7 +106,8 @@ def add_netmhcpan_to_feature_matrix(feature_matrix: pd.DataFrame, netmhcpan_pred
     return feature_matrix.join(predictions)
 
 
-def format_netmhcpan_prediction_dataframe(netmhcpan_predictions: pd.DataFrame) -> pd.DataFrame:
+def format_netmhcpan_prediction_dataframe(netmhcpan_predictions: pd.DataFrame,
+                                          peptide_list: List[str]) -> pd.DataFrame:
     """
     convert the netmhcpan predictions to a wide-format dataframe and add columns for "best" predictions per peptide.
     :param netmhcpan_predictions:
@@ -121,9 +124,11 @@ def format_netmhcpan_prediction_dataframe(netmhcpan_predictions: pd.DataFrame) -
             return 'Non-binder'
 
     predictions = pd.DataFrame()
+    predictions['Peptide'] = np.array(peptide_list)
     alleles = list(netmhcpan_predictions.loc[:, 'Allele'].unique())
     for allele in alleles:
         df = netmhcpan_predictions.loc[netmhcpan_predictions['Allele'] == allele, :].copy(deep=True)
+        assert list(df['Peptide']) == list(peptide_list)
         for pred in df.columns:
             if pred in ['Allele', 'Peptide', 'Binder']:
                 continue

@@ -157,7 +157,7 @@ def calculate_roc(qs,
     return [qs, n_psms]
 
 
-def calculate_peptide_level_qs(metrics, labels, peptides, higher_better = True):
+def calculate_peptide_level_qs(metrics, labels, peptides, higher_better=True):
 
     n_peps = len(np.unique(peptides))
     best_x = np.empty(n_peps, dtype=np.double)

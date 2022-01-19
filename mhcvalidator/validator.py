@@ -9,25 +9,23 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import backend as K
 from typing import Union, List
-from os import PathLike, devnull
+from os import PathLike
 from pathlib import Path
 from mhcvalidator.data_loaders import load_file, load_pout_data
 from mhcvalidator.features import prepare_features, eliminate_common_peptides_between_sets
 from mhcvalidator.predictions_parsers import add_mhcflurry_to_feature_matrix, add_netmhcpan_to_feature_matrix
 from mhcvalidator.predictions_parsers import format_mhcflurry_predictions_dataframe, format_netmhcpan_prediction_dataframe
 from mhcvalidator.netmhcpan_helper import NetMHCpanHelper, format_class_II_allele
-from mhcvalidator.losses_and_metrics import global_accuracy, n_psms_at_1percent_fdr
+from mhcvalidator.losses_and_metrics import global_accuracy
 from mhcvalidator.fdr import calculate_qs, calculate_peptide_level_qs, calculate_roc
-from mhcvalidator.callbacks import MonitorPSMsAtFDR
 import matplotlib.pyplot as plt
 from mhcflurry.encodable_sequences import EncodableSequences
-from mhcvalidator.models import get_model_without_peptide_encoding, get_model_with_peptide_encoding, peptide_sequence_encoder, peptide_sequence_autoencoder
-from mhcvalidator.models import reset_weights
+from mhcvalidator.models import get_model_without_peptide_encoding, get_model_with_peptide_encoding
 from mhcvalidator.peptides import clean_peptide_sequences, remove_previous_and_next_aa
+from mhcvalidator.nd_standard_scalar import NDStandardScaler
 from mhcnames import normalize_allele_name
 from copy import deepcopy
 from sklearn.model_selection import StratifiedKFold, train_test_split
-from sklearn.preprocessing import MinMaxScaler
 from datetime import datetime
 from mhcvalidator.libraries import load_library, filter_library
 import tempfile
@@ -36,17 +34,12 @@ import tensorflow.python.util.deprecation as deprecation
 from matplotlib.gridspec import GridSpec
 import subprocess
 import matplotlib.backends.backend_pdf as plt_pdf
-from contextlib import nullcontext
-from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
+from sklearn.mixture import GaussianMixture
 # from deeplc import DeepLC
-from pyteomics.mzml import MzML
-from sklearn.base import TransformerMixin
 from hyperopt import fmin, tpe, hp, space_eval
 from hyperopt.pyll.base import scope
-from scipy.stats import pearsonr
-from matplotlib.cm import get_cmap
 from inspect import signature
-from sklearn import preprocessing
+from matplotlib.cm import get_cmap
 
 deprecation._PRINT_DEPRECATION_WARNINGS = False
 
@@ -55,42 +48,6 @@ deprecation._PRINT_DEPRECATION_WARNINGS = False
 # os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 DEFAULT_TEMP_MODEL_DIR = str(Path(tempfile.gettempdir()) / 'validator_models')
-
-
-class NDStandardScaler(TransformerMixin):
-    def __init__(self):
-        self._scaler = MinMaxScaler(copy=True)
-        self._orig_shape = None
-
-    def fit(self, X, **kwargs):
-        X = np.array(X)
-        # Save the original shape to reshape the flattened X later
-        # back to its original shape
-        if len(X.shape) > 1:
-            self._orig_shape = X.shape[1:]
-        X = self._flatten(X)
-        self._scaler.fit(X, **kwargs)
-        return self
-
-    def transform(self, X):
-        X = np.array(X)
-        X = self._flatten(X)
-        X = self._scaler.transform(X)
-        X = self._reshape(X)
-        return X
-
-    def _flatten(self, X):
-        # Reshape X to <= 2 dimensions
-        if len(X.shape) > 2:
-            n_dims = np.prod(self._orig_shape)
-            X = X.reshape(-1, n_dims)
-        return X
-
-    def _reshape(self, X):
-        # Reshape X back to it's original shape
-        if len(X.shape) >= 2:
-            X = X.reshape(-1, *self._orig_shape)
-        return X
 
 
 class MhcValidator:
@@ -105,29 +62,10 @@ class MhcValidator:
         self.feature_matrix: Union[pd.DataFrame, None] = None
         self.labels: Union[List[int], None] = None
         self.peptides: Union[List[str], None] = None
-        self.previous_aa: Union[List[str], None] = None
-        self.next_aa: Union[List[str], None] = None
-        self.mzml = None
+        self.encoded_peptides = None
         self.loaded_filetype: Union[str, None] = None
         self.random_seed = random_seed
-        self.fit_history = None
-        self.X = None
-        self.y = None
-        self.X_train = None
-        self.y_train = None
-        self.X_val = None
-        self.X_train_peps = None
-        self.X_val_peps = None
-        self.X_train_encoded_peps = None
-        self.X_val_encoded_peps = None
-        self.X_encoded_peps = None
-        self.y_val = None
-        self.training_weights = None
-        self.search_score_names: List[str] = []
         self.predictions = None
-        self.training_predictions = None
-        self.testing_predictions = None
-        self.validation_predictions = None
         self.qs = None
         self.roc = None
         self.percolator_qs = None
@@ -140,6 +78,7 @@ class MhcValidator:
         self._netmhcpan_predictions: bool = False
         self.mhcflurry_predictions: pd.DataFrame = None
         self.netmhcpan_predictions: pd.DataFrame = None
+        self.annotated_data: pd.DataFrame = None
         self.modificationss = {'15.9949': 'Oxidation',
                                '0.9840': 'Deamidation'}
         if max_threads < 1:
@@ -148,8 +87,8 @@ class MhcValidator:
             self.max_threads: int = max_threads
 
     def set_mhc_params(self,
-                       alleles: Union[str, List[str]] = ('HLA-A0201', 'HLA-B0702', 'HLA-C0702'),
-                       mhc_class: str = 'I') -> None:
+                       alleles: Union[str, List[str]] = None,
+                       mhc_class: str = None) -> None:
         """
         Set the MHC-specific parameters.
 
@@ -157,10 +96,16 @@ class MhcValidator:
         :param mhc_class: The MHC class of the peptides. Must be one of {'I', 'II'}
         :return: None
         """
+        if alleles is None and mhc_class is None:
+            return None
+
         if isinstance(alleles, str):
-            alleles = alleles
-        assert mhc_class in ['I', 'II']
-        assert len(alleles) >= 1
+            alleles = [alleles]
+
+        if mhc_class is not None:
+            if mhc_class not in ['I', 'II']:
+                raise ValueError("mhc_class must be one of {'I', 'II'}")
+
         if alleles:
             self.alleles = [normalize_allele_name(a).replace('*', '').replace(':', '') for a in alleles]
         if mhc_class:
@@ -171,6 +116,14 @@ class MhcValidator:
             else:
                 self.min_len = 9
                 self.max_len = 30
+
+    def _check_peptide_lengths(self):
+        max_len = self.max_len
+        longest_peptide = np.max(np.vectorize(len)(self.peptides))
+        if max_len > longest_peptide:
+            print(f'Longest peptide ({longest_peptide} mer) is shorter than set maximum length ({max_len} mer). '
+                  f'Changing max_len to {longest_peptide}.')
+            self.max_len = longest_peptide
 
     def load_data(self,
                   filepath: Union[str, PathLike],
@@ -231,15 +184,25 @@ class MhcValidator:
                                   tag_is_prefix=tag_is_prefix, min_len=self.min_len, max_len=self.max_len)
         self.labels = self.raw_data['Label'].to_numpy()
 
-        if filetype == 'pin':
+        if peptide_column is not None:
+            self.peptides = list(self.raw_data[peptide_column])
+        elif filetype == 'pin':
             self.peptides = list(self.raw_data['Peptide'])
         elif filetype == 'mzid':
             self.peptides = list(self.raw_data['PeptideSequence'])
         elif filetype == 'spectromine':
             self.peptides = list(self.raw_data['PEP.StrippedSequence'])
         else:
-            self.peptides = list(self.raw_data['peptide'])
+            if 'peptide' in self.raw_data.columns:
+                self.peptides = list(self.raw_data['peptide'])
+            elif 'Peptide' in self.raw_data.columns:
+                self.peptides = list(self.raw_data['Peptide'])
+            else:
+                raise IndexError('Peptide field could not be automatically found. Please indicate the column '
+                                 'containing the peptide sequences')
+
         self.peptides = np.array(clean_peptide_sequences(self.peptides))
+        self._check_peptide_lengths()
 
         print(f'Loaded {len(self.peptides)} PSMs')
 
@@ -277,6 +240,8 @@ class MhcValidator:
         self.labels = self.raw_data['Label'].values
         self.peptides = list(self.raw_data['peptide'])
         self.peptides = np.array(clean_peptide_sequences(self.peptides))
+        self._check_peptide_lengths()
+
         # self.raw_data.drop(columns=['Label'], inplace=True)
         self.loaded_filetype = 'pout'
         self.filename = (Path(targets_pout).name, Path(decoys_pout).name)
@@ -329,6 +294,7 @@ class MhcValidator:
         self.labels = self.raw_data['Label'].to_numpy(np.float32)
         self.peptides = list(self.raw_data['Peptide'])
         self.peptides = np.array(clean_peptide_sequences(self.peptides))
+        self._check_peptide_lengths()
 
         self.loaded_filetype = 'PIN_POUT'
         self.filename = (Path(pin_file).name,
@@ -343,132 +309,19 @@ class MhcValidator:
         self._mhcflurry_predictions = False
         self._netmhcpan_predictions = False
 
-    def prepare_data(self, validation_split: float = 0.5,
-                     random_seed: int = None,
-                     stratification_dimensions: int = 2,
-                     subset_by_feature_qvalue: bool = False,
-                     subset_by_mhc_features_only: bool = False,
-                     subset_by_prior_qvalues: bool = False,
-                     qvalue_cutoff: float = 0.05,
-                     n_features_to_meet_cutoff: int = 1,
-                     verbosity: int = 0):
+    def encode_peptide_sequences(self):
         """
-        Encode peptide sequences and split examples into training, validation, and testing sets. Optionally, ensure
-        there are no common peptides sequences between the sets (this might result in imbalanced sets). Note that the
-        training set is implicitly what does not go into the validation and testing sets.
-        Be sure to leave a reasonable amount of data for it.
-
-        :param validation_split: float between 0 and 1. Portion of the dataset to go into the validation set.
-        :param holdout_split: float between 0 and 1. Portion of the dataset to go into the testing set.
-        :param random_seed:
-        :param stratification_dimensions: An integer in {1, 2}. If 1, only the target-decoy label is used for
-        stratification. If 2, new classes are made for MhcFlurry and/or NetMHCpan which indicates if the respective
-        peptide is predicted to be presented by any alleles or not (i.e. %rank  > 2% for any alleles is class 0, else
-        is class 1). This ensures there are predicted binders and non-binders in the training, validation, and testing
-        sets. For high-quality data this is not really necessary, but for low quality data with few identifiable
-        spectra or few predicted binders it can make a difference.
+        Use a BLOSUM62 substitution matrix to numerically encode each peptide sequence. Uses the EncodableSequences
+        class from MhcFlurry. Encoded peptides are saved in self.encoded_peptides.
         :return:
         """
-        if self.raw_data is None:
-            raise AttributeError("Data has not yet been loaded.")
-        if stratification_dimensions not in [1, 2]:
-            raise ValueError("stratification_dimensions must be in {1, 2}.")
 
-        if random_seed is None:
-            random_seed = self.random_seed
-
-        X = self.feature_matrix.to_numpy(dtype=np.float32)
-        y = np.array(self.labels, dtype=np.float32)
-        peptides = np.array(self.peptides, dtype='U100')
-
-        assert X.shape[0] == y.shape[0]
-
-        # save X and y before we do any shuffling. We will need this in the original order for predictions later
-        self.X = deepcopy(X)
-        self.y = deepcopy(y)
-
-        # encode all peptide sequences
         encoder = EncodableSequences(list(self.peptides))
         padding = 'pad_middle' if self.mhc_class == 'I' else 'left_pad_right_pad'
         encoded_peps = encoder.variable_length_to_fixed_length_vector_encoding('BLOSUM62',
                                                                                max_length=self.max_len,
                                                                                alignment_method=padding)
-        self.X_encoded_peps = deepcopy(encoded_peps)
-
-        if subset_by_feature_qvalue:
-            mask = self.get_qvalue_mask_from_features(qvalue_cutoff,
-                                                      n_features_to_meet_cutoff,
-                                                      'mhc' if subset_by_mhc_features_only else 'all',
-                                                      verbosity=verbosity)
-        elif subset_by_prior_qvalues:
-            mask = (self.qs <= qvalue_cutoff) | (self.labels == 0)
-        elif subset_by_prior_qvalues and subset_by_feature_qvalue:
-            mask1 = self.get_qvalue_mask_from_features(qvalue_cutoff,
-                                                       n_features_to_meet_cutoff,
-                                                       'mhc' if subset_by_mhc_features_only else 'all',
-                                                       verbosity=verbosity)
-            mask2 = (self.qs <= qvalue_cutoff) | (self.labels == 0)
-            mask = mask1 & mask2
-        else:
-            mask = np.full_like(y, fill_value=True, dtype=bool)
-
-        X = X[mask]
-        y = y[mask]
-        encoded_peps = encoded_peps[mask]
-        peptides = peptides[mask]
-
-        if stratification_dimensions == 1:
-            stratification = y
-        else:
-            mhcflurry = []
-            netmhcpan = []
-            for c in self.feature_matrix.columns:
-                if 'MhcFlurry_PresentationScore' in c:
-                    mhcflurry.append(c)
-                elif 'NetMHCpan_EL_score' in c:
-                    netmhcpan.append(c)
-            if not mhcflurry and not netmhcpan:
-                print("No MHC binding predictions found. Using target-decoy label only for stratification.")
-                stratification = y
-            else:
-                decoy_medians = self.feature_matrix.loc[y == 0, mhcflurry + netmhcpan].median(axis=0)
-                # are any predictions greater than twice the decoy median?
-                y2 = np.max(self.feature_matrix > 2 * decoy_medians, axis=1).astype(int)
-                stratification = np.concatenate((y[:, np.newaxis], y2[:, np.newaxis]), axis=1)
-
-        # get training and testing sets
-        (X_train, X_val, y_train, y_val, X_train_peps,
-         X_val_peps, X_train_encoded_peps, X_val_encoded_peps, _, _) = train_test_split(
-            X, y, peptides, encoded_peps, stratification,
-            random_state=random_seed,
-            stratify=stratification,
-            test_size=validation_split
-        )
-
-        assert X_train.shape[0] == y_train.shape[0] == X_train_peps.shape[0]
-        assert X_train.shape[1] == X_val.shape[1]
-
-        # scale the Xs
-        input_scalar = NDStandardScaler()
-        input_scalar = input_scalar.fit(X_train)
-        X_train = input_scalar.transform(X_train)
-        X_val = input_scalar.transform(X_val)
-        self.X = input_scalar.transform(self.X)
-
-        # scale the encoded peptides
-        input_scalar = input_scalar.fit(X_train_encoded_peps)
-        X_train_encoded_peps = input_scalar.transform(X_train_encoded_peps)
-        X_val_encoded_peps = input_scalar.transform(X_val_encoded_peps)
-        self.X_encoded_peps = input_scalar.transform(self.X_encoded_peps)
-
-        self.X_train = X_train
-        self.X_val = X_val
-        self.X_train_peps = X_train_peps
-        self.X_val_peps = X_val_peps
-        self.X_train_encoded_peps = X_train_encoded_peps
-        self.X_val_encoded_peps = X_val_encoded_peps
-        self.y_train = y_train
-        self.y_val = y_val
+        self.encoded_peptides = deepcopy(encoded_peps)
 
     def add_mhcflurry_predictions(self):
         """
@@ -539,7 +392,7 @@ class MhcValidator:
                                     mhc_class=self.mhc_class,
                                     n_threads=n_processes)
         preds = netmhcpan.predict_df()
-        self.netmhcpan_predictions = format_netmhcpan_prediction_dataframe(preds)
+        self.netmhcpan_predictions = format_netmhcpan_prediction_dataframe(preds, peptide_list=list(self.peptides))
         to_drop = [x for x in preds.columns if 'rank' in x.lower()]
         preds.drop(columns=to_drop, inplace=True)
         self.feature_matrix = add_netmhcpan_to_feature_matrix(self.feature_matrix, preds)
@@ -612,8 +465,8 @@ class MhcValidator:
         return False
 
     def get_qvalue_mask_from_features(self,
-                                      X = None,
-                                      y = None,
+                                      X=None,
+                                      y=None,
                                       cutoff: float = 0.05,
                                       n: int = 1,
                                       features_to_use: Union[List[str], str] = 'all',
@@ -860,14 +713,13 @@ class MhcValidator:
             #subset_threshold: int = 1,
             weight_by_inverse_peptide_counts: bool = False,
             visualize: bool = True,
-            report_dir: Union[str, PathLike] = None,
             random_seed: int = None,
-            report_vebosity: int = 1,
             clear_session: bool = True,
             alternate_labels=None,
             initial_model_weights: str = None,
             fit_model: bool = True,
             fig_pdf: Union[str, PathLike] = None,
+            report_directory: Union[str, PathLike] = None,
             **kwargs):
 
         """
@@ -888,9 +740,7 @@ class MhcValidator:
         :param weight_by_inverse_peptide_counts: Whether to weight training by inverse peptide counts (i.e. number of
         times a sequence is identified in the data).
         :param visualize: Visualize the results.
-        :param report_dir:
         :param random_seed: Random seed used.
-        :param report_vebosity: Print summary if > 0, else run silently.
         :param clear_session: Clear the Tensorflow session before running.
         :param alternate_labels: Alternate labels to use for training. Possibly useful in an iterative variation of the
         algorithm.
@@ -899,6 +749,8 @@ class MhcValidator:
         :param fit_model: Whether or not to fit the model. You would only set this to false if you were loading weights
         from an already-fitted model.
         :param fig_pdf: Filepath to save a PDF version of the training report.
+        :param report_directory: Save all run information to a specified location. Includes: annotated input data,
+        feature matrix, NetMHCpan and MHCFlurry predictions (if applicable), model weights, training report PDF.
         :param kwargs: Additional keyword arguments passed to model fit function.
         :return:
         """
@@ -943,6 +795,7 @@ class MhcValidator:
                                    shuffle=True).split(all_data, labels))
 
         predictions = np.zeros_like(labels, dtype=float)
+        k_splits = np.zeros_like(labels, dtype=int)
 
         output = []
         history = []
@@ -954,7 +807,9 @@ class MhcValidator:
         else:
             initial_model_weights = ''
 
-        for train_index, predict_index in skf:
+        for k_fold, (train_index, predict_index) in enumerate(skf):
+            print('-----------------------------------')
+            print(f'Training on split {k_fold+1}')
             self._set_seed(random_seed)
             if isinstance(model, keras.Model):
                 model.load_weights(initial_model_weights)
@@ -986,6 +841,8 @@ class MhcValidator:
             x_predict = deepcopy(x_predict)
             train_labels = labels[train_index][mask][rnd_idx]
             predict_labels = labels[predict_index]
+            print(f' Training split - {np.sum(train_labels == 1)} targets | {np.sum(train_labels == 0)} decoys')
+            print(f' Prediction split - {np.sum(predict_labels == 1)} targets | {np.sum(predict_labels == 0)} decoys')
 
             if weight_by_inverse_peptide_counts:
                 pep_counts = Counter(peptides)
@@ -1027,7 +884,7 @@ class MhcValidator:
                     mode="auto",
                     restore_best_weights=False)
                 now = str(datetime.now()).replace(' ', '_').replace(':', '-')
-                model_name = str(self.model_dir / f'mhcvalidator_{now}.h5')
+                model_name = str(self.model_dir / f'mhcvalidator_k={k_fold+1}_{now}.h5')
                 checkpoint = keras.callbacks.ModelCheckpoint(model_name,
                                                              monitor='val_loss', verbose=0,
                                                              save_best_only=True, mode='min')
@@ -1036,12 +893,15 @@ class MhcValidator:
                 callbacks_str = ''
                 model_name = ''
 
-
+            # Train the model
             if fit_model:
                 fit_history = eval(f"model.{model_fit_function}(x_train, train_labels, "
                                    f"{val_str} {weight_str} {callbacks_str} **kwargs)")
                 if model_name != '':
                     model.load_weights(model_name)
+                    if report_directory is not None:
+                        model.save(Path(report_directory) / f'{Path(self.filename).stem}'
+                                                            f'.mhcvalidator_model_k={k_fold+1}.h5')
             else:
                 fit_history = None
 
@@ -1056,41 +916,22 @@ class MhcValidator:
             preds = post_prediction_fn(eval(f"model.{model_predict_function}(x)")).flatten()
             qs = calculate_qs(preds.flatten(), labels)
             predictions[predict_index] = predict_preds
+            k_splits[predict_index] = k_fold + 1
             assert np.all(predict_labels == self.labels[predict_index])
 
             train_roc = calculate_roc(train_qs, train_labels, qvalue_cutoff=0.05)
             val_roc = calculate_roc(predict_qs, predict_labels, qvalue_cutoff=0.05)
             roc = calculate_roc(qs, labels, qvalue_cutoff=0.05)
 
-            n_targets = np.sum(labels == 1)
-            n_decoys = np.sum(labels == 0)
-            psms = peptides[(qs <= 0.01) & (labels == 1)]
-            n_psm_targets = len(psms)
-            n_unique_psms = len(set(psms))
-            pep_level_qs, _, pep_level_labels, peps, pep_counts = calculate_peptide_level_qs(preds, labels, peptides)
-            n_unique_peps = np.sum((pep_level_qs <= 0.01) & (pep_level_labels == 1))
+            pep_level_qs, _, pep_level_labels, peps, pep_counts = calculate_peptide_level_qs(predict_preds,
+                                                                                             predict_labels,
+                                                                                             self.peptides[predict_index])
 
-            ratio = len(train_labels) / len(predict_labels)
-            n_training_targets = np.sum((train_qs <= 0.01) & (train_labels == 1))
-            n_testing_targets = np.sum((predict_qs <= 0.01) & (predict_labels == 1))
-
-            report = '\n========== REPORT ==========\n\n' \
-                     f'Total PSMs: {len(labels)}\n' \
-                     f'Labeled as targets: {n_targets}\n' \
-                     f'Labeled as decoys: {n_decoys}\n' \
-                     f'Global FDR: {round(n_decoys / n_targets, 3)}\n' \
-                     f'Theoretical number of possible true positives (PSMs): {n_targets - n_decoys}\n' \
-                     '----- CONFIDENT PSMS AND PEPTIDES -----\n' \
-                     f'Training PSMs at 1% FDR: {n_training_targets}\n' \
-                     f'Testing PSMs at 1% FDR: {n_testing_targets}\n' \
-                     f'Ratio of training set size to testing set size: {ratio}\n' \
-                     f'Ratio of training PSMs to testing PSMs at 1% FDR: {n_training_targets / n_testing_targets}\n\n' \
-                     f'Target PSMs at 1% FDR: {n_psm_targets}\n' \
-                     f'Unique peptides at 1% PSM-level FDR: {n_unique_psms}\n' \
-                     f'Unique peptides at 1% peptide-level FDR: {n_unique_peps}\n'
-
-            if report_vebosity > 0:
-                print(report)
+            print(f' | PSMs in this split validated at 1% FDR: {np.sum((predict_qs <= 0.01) & (predict_labels == 1))}')
+            print(f' | Extrapolated to whole dataset: {np.sum((predict_qs <= 0.01) & (predict_labels == 1)) * n_splits}')
+            print(f' | Peptides in this split validated at 1% FDR (peptide-level): '
+                  f'{np.sum((pep_level_qs <= 0.01) & (pep_level_labels == 1))}')
+            print('-----------------------------------')
 
             results = {'train_preds': train_preds, 'train_labels': train_labels, 'train_qs': train_qs,
                            'train_roc': train_roc, 'predict_preds': predict_preds, 'predict_labels': predict_labels,
@@ -1106,7 +947,16 @@ class MhcValidator:
         self.qs = calculate_qs(predictions, labels)
         self.roc = calculate_roc(self.qs, self.labels)
 
-        pdf = plt_pdf.PdfPages(str(fig_pdf), keep_empty=False)
+        pep_level_qs, _, pep_level_labels, pep_level_peps, pep_counts = calculate_peptide_level_qs(self.predictions,
+                                                                                                   self.labels,
+                                                                                                   self.peptides)
+
+        print('===================================')
+        print('Validation results')
+        print(f' | PSMs validated at 1% FDR: {np.sum((self.qs <= 0.01) & (self.labels == 1))}')
+        print(f' | Peptides validated at 1% FDR (peptide-level): '
+              f'{np.sum((pep_level_qs <= 0.01) & (pep_level_labels == 1))}')
+        print('===================================')
 
         fig = plt.figure(constrained_layout=True, figsize=(10, 10))
         fig.suptitle(self.filename, fontsize=16)
@@ -1187,15 +1037,41 @@ class MhcValidator:
         plt.tight_layout()
         if visualize:
             fig.show()
-        if fig_pdf:
+        if fig_pdf is not None:
+            pdf = plt_pdf.PdfPages(str(fig_pdf), keep_empty=False)
             pdf.savefig(fig)
+            pdf.close()
+        if report_directory is not None:
+            pdf_file = Path(report_directory) / f'{Path(self.filename).stem}.MhcValidator_training_report.pdf'
+            pdf = plt_pdf.PdfPages(str(pdf_file), keep_empty=False)
+            pdf.savefig(fig)
+            pdf.close()
         plt.close(fig)
-        pdf.close()
+
+        # make peptide-level q-value lookup
+        pep_q_lookup = {pep: q for pep, q in zip(pep_level_peps, pep_level_qs)}
 
         self.raw_data['mhcv_peptide'] = self.peptides
         self.raw_data['mhcv_prob'] = self.predictions
         self.raw_data['mhcv_label'] = self.labels
         self.raw_data['mhcv_q-value'] = self.qs
+        self.raw_data['mhcv_pep-level_q-value'] = np.array([pep_q_lookup[p] for p in self.peptides])
+        self.raw_data['mhcv_k-fold_split'] = k_splits
+
+        self.annotated_data = self.raw_data.copy(deep=True)
+
+        if report_directory is not None:
+            self.annotated_data.to_csv(Path(report_directory) /
+                                       f'{Path(self.filename).stem}.MhcValidator_annotated.tsv',
+                                       index=False, sep='\t')
+            if self._mhcflurry_predictions:
+                self.mhcflurry_predictions.to_csv(Path(report_directory) /
+                                                  f'{Path(self.filename).stem}.MhcFlurry_Predictions.tsv',
+                                                  index=False, sep='\t')
+            if self._netmhcpan_predictions:
+                self.netmhcpan_predictions.to_csv(Path(report_directory) /
+                                                  f'{Path(self.filename).stem}.NetMHCpan_Predictions.tsv',
+                                                  index=False, sep='\t')
 
         if return_prediction_data_and_model:
             return output, {'predictions': deepcopy(self.predictions),
@@ -1203,119 +1079,6 @@ class MhcValidator:
                             'roc': deepcopy(self.roc)}
 
     def optimize_arbitrary_model(self,
-                                 model,
-                                 space,
-                                 instantiate_model: bool = False,
-                                 model_fit_function='fit',
-                                 model_predict_function='predict',
-                                 post_prediction_fn=lambda x: x,
-                                 objective_fn=None,
-                                 additional_training_data_for_model=None,
-                                 return_best_results: bool = False,
-                                 fdr_of_interest: float = 0.01,
-                                 algo=tpe.suggest,
-                                 n_evals: int = 100,
-                                 visualize_trials: bool = False,
-                                 visualize_best: bool = True,
-                                 report_dir: Union[str, PathLike] = None,
-                                 random_seed: int = None,
-                                 fig_pdf: Union[str, PathLike] = None,
-                                 additional_model_kwargs=None,
-                                 additional_fit_kwargs=None):
-
-        K.clear_session()
-        if random_seed is None:
-            random_seed = self.random_seed
-        self._set_seed()
-        fmin_rstate = numpy.random.default_rng(random_seed)
-        if additional_fit_kwargs is None:
-            additional_fit_kwargs = {}
-        if additional_model_kwargs is None:
-            additional_model_kwargs = {}
-
-        if objective_fn is None:
-            def objective_fn(params):
-                print(f'Parameters: {params}')
-                if instantiate_model:
-                    model_params = params['model_params']
-                    model_to_fit = model(**model_params, **additional_model_kwargs)
-                else:
-                    model_to_fit = model
-                fit_params = params['fit_params']
-                run_params = params['run_params']
-                results = self.run(model=model_to_fit,
-                                   model_fit_function=model_fit_function,
-                                   model_predict_function=model_predict_function,
-                                   post_prediction_fn=post_prediction_fn,
-                                   additional_training_data_for_model=additional_training_data_for_model,
-                                   return_prediction_data_and_model=True,
-                                   visualize=visualize_trials,
-                                   **run_params,
-                                   **fit_params,
-                                   **additional_fit_kwargs)
-
-                upper_q = fdr_of_interest + 0.01
-                lower_q = fdr_of_interest - 0.01
-                train_q_dist, _ = np.histogram(results['train_qs'][(results['train_qs'] >= lower_q) &
-                                                                   (results['train_qs'] <= upper_q) &
-                                                                   (results['train_labels'] == 1)])
-                val_q_dist, _ = np.histogram(results['test_qs'][(results['test_qs'] >= lower_q) &
-                                                                (results['test_qs'] <= upper_q) &
-                                                                (results['test_labels'] == 1)])
-                dist_correlation_score = 1 - pearsonr(train_q_dist, val_q_dist)[0]
-
-                cum_train_q_dist = [np.sum(train_q_dist[:i]) for i in range(len(train_q_dist))]
-                cum_val_q_dist = [np.sum(val_q_dist[:i]) for i in range(len(val_q_dist))]
-                cum_dist_correlation_score = 1 - pearsonr(cum_train_q_dist, cum_val_q_dist)[0]
-
-                n_train = np.sum(train_q_dist)
-                n_val = np.sum(val_q_dist)
-                n_diff_psm_score = np.sum(np.abs(train_q_dist - val_q_dist) / np.max((train_q_dist, val_q_dist), axis=0))
-
-                n_possible = np.sum(self.labels == 1) - np.sum(self.labels == 0)
-                n_targets = np.sum((results['qs'] <= 0.01) & (results['labels'] == 1))
-                n_psm_score = (n_possible - n_targets) / n_possible
-
-                combined_loss = np.mean((n_diff_psm_score * 2, n_psm_score))
-
-                print('Trial results:')
-                print(f'\tDistribution correlation loss: {dist_correlation_score}')
-                print(f'\tCumulative distribution correlation loss: {cum_dist_correlation_score}')
-                print(f'\tDifference between train and val at {fdr_of_interest} FDR loss: {n_diff_psm_score}')
-                print(f'\tPSMs at {fdr_of_interest} loss: {n_psm_score}')
-                print(f'\tCombined loss: {combined_loss}\n')
-
-                return combined_loss
-
-        best = fmin(fn=objective_fn,
-                    space=space,
-                    algo=algo,
-                    max_evals=n_evals,
-                    rstate=fmin_rstate)
-
-        best_args = space_eval(space, best)
-        print(f'Best parameters found: {best_args}')
-        print(f'Running best model')
-        if instantiate_model:
-            model_params = best_args['model_params']
-            model_to_fit = model(**model_params, **additional_model_kwargs)
-        else:
-            model_to_fit = model
-        # and here get only the params we need for this part
-        fit_params = best_args['fit_params']
-        run_params = best_args['run_params']
-        results = self.run(model=model_to_fit,
-                           model_fit_function=model_fit_function,
-                           model_predict_function=model_predict_function,
-                           additional_training_data_for_model=additional_training_data_for_model,
-                           return_prediction_data_and_model=True,
-                           visualize=visualize_best,
-                           **run_params,
-                           **fit_params, **additional_fit_kwargs)
-        if return_best_results:
-            return results
-
-    def optimize_arbitrary_model3(self,
                                  model,
                                  space,
                                  instantiate_model: bool = False,
@@ -1727,21 +1490,6 @@ class MhcValidator:
             plt.clf()
             plt.close()
             return None, None
-
-    def write_table(self, filename: Union[str, PathLike] = None):
-        if self.predictions is None or self.model is None:
-            raise RuntimeError("The model must be trained first.")
-
-    '''def plot_roc(self, q_cutoff=0.05):
-        qs = self.qs[self.y == 1]  # get q-values of targets
-        qs = qs[qs <= q_cutoff]
-        roc = np.sum(qs <= qs[:, np.newaxis], axis=1)
-        plt.plot(qs, roc, ls='none', marker='.', ms=1)
-        plt.xlabel('FDR')
-        plt.ylabel('Number of PSMs')
-        plt.title('ROC')
-        plt.xlim((0, q_cutoff))
-        plt.show()'''
 
     def get_peptide_list_at_fdr(self, fdr: float, label: int = 1):
         return self.peptides[(self.qs <= fdr) & (self.labels == label)]
