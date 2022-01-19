@@ -158,18 +158,18 @@ def calculate_roc(qs,
 
 
 def calculate_peptide_level_qs(metrics, labels, peptides, higher_better=True):
-
+    max_len = np.max(np.vectorize(len)(peptides))
     n_peps = len(np.unique(peptides))
     best_x = np.empty(n_peps, dtype=np.double)
     best_y = np.empty(n_peps, dtype=np.intc)
-    best_peps = np.empty(n_peps, dtype='U15')
+    best_peps = np.empty(n_peps, dtype=f'U{max_len}')
 
     peptide_counter = Counter(peptides)
 
     ordered_idx = np.argsort(peptides)
     x = np.asarray([metrics[i] for i in ordered_idx], dtype=np.double)
     y = np.asarray([labels[i] for i in ordered_idx], dtype=np.int)
-    peps = np.asarray([peptides[i] for i in ordered_idx], dtype='U20')
+    peps = np.asarray([peptides[i] for i in ordered_idx], dtype=f'U{max_len}')
 
     current_peptide = peps[0]
     current_metric = x[0]
