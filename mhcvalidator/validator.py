@@ -88,12 +88,19 @@ class MhcValidator:
 
     def set_mhc_params(self,
                        alleles: Union[str, List[str]] = None,
-                       mhc_class: str = None) -> None:
+                       mhc_class: str = None,
+                       max_pep_len: int = None,
+                       min_pep_len: int = None) -> None:
         """
         Set the MHC-specific parameters.
 
         :param alleles: The alleles to be used by MhcFlurry or NetMHCpan.
         :param mhc_class: The MHC class of the peptides. Must be one of {'I', 'II'}
+        :param min_pep_len: Maximum length of peptides allowed. Will default to 16 for class I and 30 for class II. Note
+        that MhcFlurry does not accept peptide lengths greater than 16. There is no length restriction for NetMHCpan.
+        :param max_pep_len: Minimum length of peptides allowed. Will default to 8 for class I and 9 for class II. Note
+        that NetMHC(II)pan does not accept peptide lengths less than 8 for class I or 9 for class I. NetMHCpan predictions
+        take much longer for longer peptides.
         :return: None
         """
         if alleles is None and mhc_class is None:
@@ -110,12 +117,22 @@ class MhcValidator:
             self.alleles = [normalize_allele_name(a).replace('*', '').replace(':', '') for a in alleles]
         if mhc_class:
             self.mhc_class = mhc_class
+
+        if max_pep_len is not None:
+            self.max_len = max_pep_len
+        else:
+            if self.mhc_class == 'I':
+                self.max_len = 16
+            else:
+                self.max_len = 30
+
+        if min_pep_len is not None:
+            self.min_len = min_pep_len
+        else:
             if self.mhc_class == 'I':
                 self.min_len = 8
-                self.max_len = 15
             else:
                 self.min_len = 9
-                self.max_len = 30
 
     def _check_peptide_lengths(self):
         max_len = self.max_len
@@ -323,7 +340,7 @@ class MhcValidator:
                                                                                alignment_method=padding)
         self.encoded_peptides = deepcopy(encoded_peps)
 
-    def add_mhcflurry_predictions(self):
+    def add_mhcflurry_predictions(self, force: bool = False):
         """
         Run MhcFlurry and add presentation predictions to the training feature matrix.
 
@@ -335,8 +352,14 @@ class MhcValidator:
             raise RuntimeError('MhcFlurry is only compatible with MHC class I')
         if self.feature_matrix is None:
             raise RuntimeError('It looks like you haven\'t loaded any data. Load some data!')
+        if np.max(np.vectorize(len)(self.peptides)) > 16:
+            raise RuntimeError('MhcFlurry cannot make predictions on peptides over length 16.')
         if self._mhcflurry_predictions:
-            raise RuntimeError('MhcFlurry predictions have already been added to this instance.')
+            if not force:
+                raise RuntimeError('MhcFlurry predictions have already been added to this instance. If you want to '
+                                   'run anyway, set the `force` argument to True.')
+            else:
+                print('MhcFlurry predictions have already been added to this instance. Forcing run.')
         print('Running MhcFlurry')
 
         # we will run MhcFlurry in a separate process so the Tensorflow space doesn't get messed up. I don't know why it
@@ -369,7 +392,7 @@ class MhcValidator:
                                                               peptide_list=self.peptides)
         self._mhcflurry_predictions = True
 
-    def add_netmhcpan_predictions(self, n_processes: int = 0):
+    def add_netmhcpan_predictions(self, n_processes: int = 0, force: bool = False):
         """
         Run NetMHCpan and add presentation predictions to the training feature matrix.
 
@@ -385,7 +408,11 @@ class MhcValidator:
         if self.feature_matrix is None:
             raise RuntimeError('It looks like you haven\'t loaded any data. Load some data!')
         if self._netmhcpan_predictions:
-            raise RuntimeError('NetMHCpan predictions have already been added to this instance.')
+            if not force:
+                raise RuntimeError('NetMHCpan predictions have already been added to this instance. If you want to '
+                                   'run anyway, set the `force` argument to True.')
+            else:
+                print('NetMHCpan predictions have already been added to this instance. Forcing run.')
         print(f'Running NetMHC{"II" if self.mhc_class == "II" else ""}pan')
         netmhcpan = NetMHCpanHelper(peptides=self.peptides,
                                     alleles=alleles,
@@ -665,7 +692,8 @@ class MhcValidator:
                                                 filter_size=filter_size,
                                                 n_filters=n_filters,
                                                 filter_stride=filter_stride,
-                                                n_encoded_sequence_features=n_encoded_sequence_features
+                                                n_encoded_sequence_features=n_encoded_sequence_features,
+                                                max_pep_length=self.max_len
                                                 )
         model.compile(optimizer=optimizer, loss=loss_fn)
 
