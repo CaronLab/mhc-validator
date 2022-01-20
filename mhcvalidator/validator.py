@@ -651,8 +651,7 @@ class MhcValidator:
                                                    hidden_layers=hidden_layers,
                                                    max_pep_length=self.max_len,
                                                    width_ratio=width_ratio)
-        model.compile(loss=loss_fn, optimizer=optimizer,
-                      run_eagerly=True)
+        model.compile(loss=loss_fn, optimizer=optimizer)
 
         return model
 
@@ -1519,5 +1518,10 @@ class MhcValidator:
             plt.close()
             return None, None
 
-    def get_peptide_list_at_fdr(self, fdr: float, label: int = 1):
-        return self.peptides[(self.qs <= fdr) & (self.labels == label)]
+    def get_peptide_list_at_fdr(self, fdr: float, label: int = 1, peptide_level: bool = False):
+        if peptide_level:
+            qs, _, labels, peps, _ = calculate_peptide_level_qs(self.predictions, self.labels,
+                                                                self.peptides)
+            return peps[(qs <= fdr) & (labels == label)]
+        else:
+            return self.peptides[(self.qs <= fdr) & (self.labels == label)]
