@@ -40,6 +40,8 @@ from hyperopt import fmin, tpe, hp, space_eval
 from hyperopt.pyll.base import scope
 from inspect import signature
 from matplotlib.cm import get_cmap
+from mhcvalidator.rt_prediction import train_predict as train_predict_rt
+from mhcvalidator.rt_prediction import extract_rt
 
 deprecation._PRINT_DEPRECATION_WARNINGS = False
 
@@ -76,6 +78,7 @@ class MhcValidator:
         self.model_dir = Path(model_dir)
         self._mhcflurry_predictions: bool = False
         self._netmhcpan_predictions: bool = False
+        self._retention_time_features: bool = False
         self.mhcflurry_predictions: pd.DataFrame = None
         self.netmhcpan_predictions: pd.DataFrame = None
         self.annotated_data: pd.DataFrame = None
@@ -122,7 +125,7 @@ class MhcValidator:
             self.max_len = max_pep_len
         else:
             if self.mhc_class == 'I':
-                self.max_len = 16
+                self.max_len = 15
             else:
                 self.max_len = 30
 
@@ -233,6 +236,7 @@ class MhcValidator:
                                                use_features=use_features)
         self._mhcflurry_predictions = False
         self._netmhcpan_predictions = False
+        self._retention_time_features = False
 
     def load_pout_data(self,
                        targets_pout: Union[str, PathLike],
@@ -269,6 +273,7 @@ class MhcValidator:
                                                use_features=use_features)
         self._mhcflurry_predictions = False
         self._netmhcpan_predictions = False
+        self._retention_time_features = False
 
     def load_percolator_data(self,
                              pin_file: Union[str, PathLike],
@@ -325,6 +330,7 @@ class MhcValidator:
                                                use_features=use_features)
         self._mhcflurry_predictions = False
         self._netmhcpan_predictions = False
+        self._retention_time_features = False
 
     def encode_peptide_sequences(self):
         """
@@ -461,26 +467,38 @@ class MhcValidator:
             print(f'Unable to run MhcFlurry.'
                   f'{" See exception information above." if verbose_errors else ""}')
 
-    def add_deeplc_modifications(self, mods = 'default'):
-        if mods == 'default':
-            mods = {'15.9949': 'Oxidation',
-                    '0.9840': 'Deamidation'}
-        for key, value in mods.items():
-            self.modificationss[key] = value
+    def add_autort_features(self,
+                            mzml_file: Union[str, PathLike],
+                            scan_list: List[int] = None,
+                            epochs_for_prerun: int = 5,
+                            qvalue_for_training: float = 0.01,
+                            force: bool = False):
+        if (self._mhcflurry_predictions or self._netmhcpan_predictions) and not force:
+            raise ValueError('MhcFlurry or NetMHCpan predictions have been added to the feature matrix. It is '
+                             'recommended that you add AutoRT features prior to MHC predictions. To run anyway, '
+                             'set the `force` argument to True.')
 
-    def add_deeplc_features(self,
-                            rt_file: str,
-                            rt_header: str = 'retention_time_sec',
-                            calibration_qvalue: float = 0.01,
-                            calibration_features: Union[str, List[str]] = 'lnExpect',
-                            n_features_must_pass: int = 1):
-        peptides = remove_previous_and_next_aa(self.raw_data['Peptide'])
-        mask = self.get_qvalue_mask_from_features(cutoff=calibration_qvalue,
-                                                  n=n_features_must_pass,
-                                                  features_to_use=calibration_features)
-        #mzml = MzML(mzml_file)
+        if scan_list is None:
+            scan_list = self.raw_data['ScanNr']
+        observed_rts = extract_rt(scan_list, mzml_file)
 
+        print('Running initial validation to get training set.')
+        self.run(model=self.get_nn_model(), epochs=epochs_for_prerun, verbose=0, visualize=False)
+        train_peptides = self.raw_data.loc[(self.qs <= qvalue_for_training) & (self.labels == 1), 'Peptide'].values
+        train_rts = observed_rts[(self.qs <= qvalue_for_training) & (self.labels == 1)]
+        max_rt = int(np.ceil(max(observed_rts)))
 
+        predicted_rts = train_predict_rt(self.raw_data['Peptide'].values, train_peptides, train_rts,
+                                         max_retention_time=max_rt, encode_modifications=True)
+
+        self.raw_data['mhcv_observed_rt'] = observed_rts
+        self.raw_data['mhcv_predicted_rt'] = predicted_rts
+        self.raw_data['rel_rt_error'] = (predicted_rts - observed_rts) / observed_rts
+        self.raw_data['rt_error'] = predicted_rts - observed_rts
+        self.feature_matrix['rel_rt_error'] = (predicted_rts - observed_rts) / observed_rts
+        self.feature_matrix['rt_error'] = predicted_rts - observed_rts
+
+        self._retention_time_features = True
 
     @staticmethod
     def _string_contains(string: str, pattern: Union[List[str], str]):
@@ -1104,6 +1122,28 @@ class MhcValidator:
             return output, {'predictions': deepcopy(self.predictions),
                             'qs': deepcopy(self.qs),
                             'roc': deepcopy(self.roc)}
+
+    def plot_retention_time_correlation(self,
+                                        target_fdr: float = 0.01,
+                                        plot_decoys: bool = True,
+                                        rt_units: str = 'min'):
+        if 'observerd_rt' not in self.feature_matrix.columns or 'predicted_rt' not in self.feature_matrix.columns:
+            raise IndexError('observerd_rt and predicted_rt are not in the feature matrix columns. You must first '
+                             'add AutoRT features.')
+        plt.plot([10, 60], [10, 60], ls='--', c='k', alpha=0.6)
+        plt.fill_between([10, 60], [5, 55], [15, 65], color='red', alpha=0.2)
+        if plot_decoys:
+            plt.plot(self.feature_matrix['observed_rt'][(self.labels == 0)],
+                     self.feature_matrix['predicted_rt'][(self.labels == 0)],
+                     ls='none', marker='.', ms='3', label='Decoys', alpha=0.1, c='k')
+        plt.plot(self.feature_matrix['observed_rt'][(self.qs <= target_fdr) & (self.labels == 1)],
+                 self.feature_matrix['predicted_rt'][(self.qs <= target_fdr) & (self.labels == 1)],
+                 c='green', ls='none', marker='.', ms='3', label=f'Targets at {int(target_fdr*100)}% FDR')
+        plt.legend(markerscale=2)
+        plt.xlabel(f'Observed retention time ({rt_units})')
+        plt.ylabel(f'Predicted retention time ({rt_units})')
+        plt.show()
+        plt.close()
 
     def optimize_arbitrary_model(self,
                                  model,
