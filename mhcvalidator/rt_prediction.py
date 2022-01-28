@@ -34,7 +34,7 @@ def autort_files():
     gen_model_files += [f'https://github.com/bzhanglab/AutoRT/raw/master/models/general_base_model/model_{x}.h5'
                         for x in range(10)]
 
-    python_files = ['https://github.com/bzhanglab/AutoRT/raw/master/autort/DataIO.py',
+    module_files = ['https://github.com/bzhanglab/AutoRT/raw/master/autort/DataIO.py',
                     'https://github.com/bzhanglab/AutoRT/raw/master/autort/Metrics.py',
                     'https://github.com/bzhanglab/AutoRT/raw/master/autort/ModelT.py',
                     'https://github.com/bzhanglab/AutoRT/raw/master/autort/ModelUpdate.py',
@@ -44,7 +44,7 @@ def autort_files():
                     'https://github.com/bzhanglab/AutoRT/raw/master/autort/Utils.py',
                     'https://github.com/bzhanglab/AutoRT/raw/master/autort/__init__.py',]
 
-    return files, model_files, gen_model_files, python_files
+    return files, model_files, gen_model_files, module_files
 
 
 def do_autort_files_exist() -> bool:
