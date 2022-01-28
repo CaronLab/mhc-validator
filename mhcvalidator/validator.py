@@ -8,7 +8,7 @@ from numpy.random import RandomState
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import backend as K
-from typing import Union, List
+from typing import Union, List, Tuple
 from os import PathLike
 from pathlib import Path
 from mhcvalidator.data_loaders import load_file, load_pout_data
@@ -21,7 +21,7 @@ from mhcvalidator.fdr import calculate_qs, calculate_peptide_level_qs, calculate
 import matplotlib.pyplot as plt
 from mhcflurry.encodable_sequences import EncodableSequences
 from mhcvalidator.models import get_model_without_peptide_encoding, get_model_with_peptide_encoding
-from mhcvalidator.peptides import clean_peptide_sequences, remove_previous_and_next_aa
+from mhcvalidator.peptides import clean_peptide_sequences, resolve_duplicates_between_splits
 from mhcvalidator.nd_standard_scalar import NDStandardScaler
 from mhcnames import normalize_allele_name
 from copy import deepcopy
@@ -66,11 +66,13 @@ class MhcValidator:
         self.peptides: Union[List[str], None] = None
         self.encoded_peptides = None
         self.loaded_filetype: Union[str, None] = None
-        self.random_seed = random_seed
-        self.predictions = None
-        self.qs = None
+        self.random_seed: int = random_seed
+        self.predictions: np.array = None
+        self.qs: np.array = None
         self.roc = None
         self.percolator_qs = None
+        self.obs_rts: np.array = None
+        self.pred_rts: np.array = None
         self.mhc_class: str = None
         self.alleles: List[str] = None
         self.min_len: int = 5
@@ -467,12 +469,13 @@ class MhcValidator:
             print(f'Unable to run MhcFlurry.'
                   f'{" See exception information above." if verbose_errors else ""}')
 
-    def add_autort_features(self,
-                            mzml_file: Union[str, PathLike],
-                            scan_list: List[int] = None,
-                            epochs_for_prerun: int = 5,
-                            qvalue_for_training: float = 0.01,
-                            force: bool = False):
+    def make_autort_predictions(self,
+                                mzml_file: Union[str, PathLike],
+                                scan_list: List[int] = None,
+                                epochs_for_prerun: int = 5,
+                                qvalue_for_training: float = 0.01,
+                                add_to_feature_matrix: bool = True,
+                                force: bool = False):
         if (self._mhcflurry_predictions or self._netmhcpan_predictions) and not force:
             raise ValueError('MhcFlurry or NetMHCpan predictions have been added to the feature matrix. It is '
                              'recommended that you add AutoRT features prior to MHC predictions. To run anyway, '
@@ -491,12 +494,16 @@ class MhcValidator:
         predicted_rts = train_predict_rt(self.raw_data['Peptide'].values, train_peptides, train_rts,
                                          max_retention_time=max_rt, encode_modifications=True)
 
-        self.raw_data['mhcv_observed_rt'] = observed_rts
-        self.raw_data['mhcv_predicted_rt'] = predicted_rts
-        self.raw_data['rel_rt_error'] = (predicted_rts - observed_rts) / observed_rts
-        self.raw_data['rt_error'] = predicted_rts - observed_rts
-        self.feature_matrix['rel_rt_error'] = (predicted_rts - observed_rts) / observed_rts
-        self.feature_matrix['rt_error'] = predicted_rts - observed_rts
+        self.obs_rts = observed_rts
+        self.pred_rts = predicted_rts
+
+        if add_to_feature_matrix:
+            self.raw_data['mhcv_observed_rt'] = observed_rts
+            self.raw_data['mhcv_predicted_rt'] = predicted_rts
+            self.raw_data['rel_rt_error'] = (predicted_rts - observed_rts) / observed_rts
+            self.raw_data['rt_error'] = predicted_rts - observed_rts
+            self.feature_matrix['rel_rt_error'] = (predicted_rts - observed_rts) / observed_rts
+            self.feature_matrix['rt_error'] = predicted_rts - observed_rts
 
         self._retention_time_features = True
 
@@ -756,7 +763,7 @@ class MhcValidator:
             #q_value_subset: float = 1.0,
             #features_for_subset: Union[List[str], str] = 'all',
             #subset_threshold: int = 1,
-            weight_by_inverse_peptide_counts: bool = False,
+            weight_by_inverse_peptide_counts: bool = True,
             visualize: bool = True,
             random_seed: int = None,
             clear_session: bool = True,
@@ -856,6 +863,14 @@ class MhcValidator:
             print('-----------------------------------')
             print(f'Training on split {k_fold+1}')
             self._set_seed(random_seed)
+
+            # make sure peptide sequences aren't duplicated bewtween train and test sets
+            '''train_index, predict_index = resolve_duplicates_between_splits(index1=train_index,
+                                                                           index2=predict_index,
+                                                                           peptides=peptides,
+                                                                           k=n_splits,
+                                                                           random_seed=random_seed)'''
+
             if isinstance(model, keras.Model):
                 model.load_weights(initial_model_weights)
             feature_matrix = deepcopy(all_data)
@@ -890,7 +905,7 @@ class MhcValidator:
             print(f' Prediction split - {np.sum(predict_labels == 1)} targets | {np.sum(predict_labels == 0)} decoys')
 
             if weight_by_inverse_peptide_counts:
-                pep_counts = Counter(peptides)
+                pep_counts = Counter(peptides[train_index][mask])
                 weights = np.array([np.sqrt(1 / pep_counts[p]) for p in peptides[train_index][mask][rnd_idx]])
             else:
                 weights = np.ones_like(labels[train_index][mask][rnd_idx])
@@ -916,7 +931,7 @@ class MhcValidator:
             else:
                 val_str = ''
 
-            if 'sample_weight' not in model_fit_parameters.keys():
+            if 'sample_weight' in model_fit_parameters.keys():
                 weight_str = 'sample_weight=weights,'
             else:
                 weight_str = ''
@@ -1005,31 +1020,35 @@ class MhcValidator:
 
         fig = plt.figure(constrained_layout=True, figsize=(10, 10))
         fig.suptitle(self.filename, fontsize=16)
-        gs = GridSpec(12, 2, figure=fig)
+        gs = GridSpec(2, 2, figure=fig)
 
-        train = fig.add_subplot(gs[:4, 0])
-        val = fig.add_subplot(gs[4:8, 0])
-        final = fig.add_subplot(gs[8:, 0])
+        # train = fig.add_subplot(gs[:4, 0])
+        # val = fig.add_subplot(gs[4:8, 0])
+        final: plt.Axes = fig.add_subplot(gs[0, 0])
 
         if len(history) > 0:  # the model returned a fit history we can use here
-            dist = fig.add_subplot(gs[0:4, 1])
-            loss = fig.add_subplot(gs[4:8, 1])
-            train_split = fig.add_subplot(gs[8:10, 1])
-            val_split = fig.add_subplot(gs[10:, 1])
+            dist: plt.Axes = fig.add_subplot(gs[0, 1])
+            loss: plt.Axes = fig.add_subplot(gs[1, 1])
+            #train_split = fig.add_subplot(gs[8:10, 1])
+            #val_split = fig.add_subplot(gs[10:, 1])
         else:
-            loss = None
-            dist = fig.add_subplot(gs[:6, 1])
-            train_split = fig.add_subplot(gs[6:9, 1])
-            val_split = fig.add_subplot(gs[9:, 1])
+            loss: plt.Axes = None
+            dist: plt.Axes = fig.add_subplot(gs[0, 1])
+            #train_split = fig.add_subplot(gs[6:9, 1])
+            #val_split = fig.add_subplot(gs[9:, 1])
+
+        if self._retention_time_features:
+            rt_corr: plt.Axes = fig.add_subplot(gs[1, 0])
+            self.plot_retention_time_correlation(target_fdr=0.05, ax=rt_corr, visualize=False)
 
         colormap = get_cmap("tab10")
 
-        self._visualize_splits(skf, split='train', ax=train_split)
-        self._visualize_splits(skf, split='val', ax=val_split)
-        train_split.set_title('K-fold splits')
-        train_split.set_ylabel('Training')
-        val_split.set_ylabel('Validation')
-        val_split.set_xlabel('Scan number')
+        # self._visualize_splits(skf, split='train', ax=train_split)
+        # self._visualize_splits(skf, split='val', ax=val_split)
+        # train_split.set_title('K-fold splits')
+        # train_split.set_ylabel('Training')
+        # val_split.set_ylabel('Validation')
+        # val_split.set_xlabel('Scan number')
 
         if loss:
             min_x = []
@@ -1045,26 +1064,30 @@ class MhcValidator:
             loss.set_ylabel('Loss')
             loss.legend()
 
-        for i, r in enumerate(output):
-            train.plot(*r['train_roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
-            val.plot(*r['predict_roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
+        # for i, r in enumerate(output):
+        #     train.plot(*r['train_roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
+        #     val.plot(*r['predict_roc'], c=colormap(i), ms='3', ls='none', marker='.', label=f'split {i+1}', alpha=0.6)
         final.plot(*self.roc, c=colormap(0), ms='3', ls='none', marker='.', alpha=0.6)
+        n_psms_at_1percent = np.sum((self.qs <= 0.01) & (self.labels == 1))
+        final.vlines(0.01, 0, n_psms_at_1percent, ls='--', lw=1, color='k', alpha=0.7)
+        final.hlines(n_psms_at_1percent, 0, 0.01, ls='--', lw=1, color='k', alpha=0.7)
+
         _, bins, _ = dist.hist(self.predictions[self.labels == 1], label='Target', bins=30, alpha=0.5, color='g')
         dist.hist(self.predictions[self.labels == 0], label='Decoy', bins=bins, alpha=0.5, zorder=100, color='r')
 
-        train.set_xlim((0, 0.05))
-        val.set_xlim((0, 0.05))
+        # train.set_xlim((0, 0.05))
+        # val.set_xlim((0, 0.05))
         final.set_xlim((0, 0.05))
 
-        train.set_title('Training data')
-        train.set_xlabel('q-value')
-        train.set_ylabel('PSMs')
-        train.set_ylim((0, train.get_ylim()[1]))
+        # train.set_title('Training data')
+        # train.set_xlabel('q-value')
+        # train.set_ylabel('PSMs')
+        # train.set_ylim((0, train.get_ylim()[1]))
 
-        val.set_title('Validation data')
-        val.set_xlabel('q-value')
-        val.set_ylabel('PSMs')
-        val.set_ylim((0, val.get_ylim()[1]))
+        # val.set_title('Validation data')
+        # val.set_xlabel('q-value')
+        # val.set_ylabel('PSMs')
+        # val.set_ylim((0, val.get_ylim()[1]))
 
         final.set_title('Final q-values')
         final.set_xlabel('q-value')
@@ -1075,8 +1098,8 @@ class MhcValidator:
         dist.set_xlabel('Target probability')
         dist.set_ylabel('PSMs')
 
-        train.legend(markerscale=3)
-        val.legend(markerscale=3)
+        # train.legend(markerscale=3)
+        # val.legend(markerscale=3)
         dist.legend()
 
         plt.tight_layout()
@@ -1126,24 +1149,29 @@ class MhcValidator:
     def plot_retention_time_correlation(self,
                                         target_fdr: float = 0.01,
                                         plot_decoys: bool = True,
-                                        rt_units: str = 'min'):
-        if 'observerd_rt' not in self.feature_matrix.columns or 'predicted_rt' not in self.feature_matrix.columns:
-            raise IndexError('observerd_rt and predicted_rt are not in the feature matrix columns. You must first '
-                             'add AutoRT features.')
-        plt.plot([10, 60], [10, 60], ls='--', c='k', alpha=0.6)
-        plt.fill_between([10, 60], [5, 55], [15, 65], color='red', alpha=0.2)
+                                        rt_units: str = 'min',
+                                        ax: plt.Axes = None,
+                                        visualize: bool = False):
+        if not self._retention_time_features:
+            raise Exception('You must first add AutoRT predictions.')
+        if ax is None:
+            fig, ax = plt.subplots()
+        ax.plot([10, 60], [10, 60], ls='--', c='k', alpha=0.6)
+        ax.fill_between([10, 60], [5, 55], [15, 65], color='red', alpha=0.2)
+
         if plot_decoys:
-            plt.plot(self.feature_matrix['observed_rt'][(self.labels == 0)],
-                     self.feature_matrix['predicted_rt'][(self.labels == 0)],
-                     ls='none', marker='.', ms='3', label='Decoys', alpha=0.1, c='k')
-        plt.plot(self.feature_matrix['observed_rt'][(self.qs <= target_fdr) & (self.labels == 1)],
-                 self.feature_matrix['predicted_rt'][(self.qs <= target_fdr) & (self.labels == 1)],
-                 c='green', ls='none', marker='.', ms='3', label=f'Targets at {int(target_fdr*100)}% FDR')
-        plt.legend(markerscale=2)
-        plt.xlabel(f'Observed retention time ({rt_units})')
-        plt.ylabel(f'Predicted retention time ({rt_units})')
-        plt.show()
-        plt.close()
+            ax.plot(self.obs_rts[(self.labels == 0)], self.pred_rts[(self.labels == 0)],
+                    ls='none', marker='.', ms='3', label='Decoys', alpha=0.1, c='k')
+
+        ax.plot(self.obs_rts[(self.qs <= target_fdr) & (self.labels == 1)],
+                self.pred_rts[(self.qs <= target_fdr) & (self.labels == 1)],
+                c='green', ls='none', marker='.', ms='3', label=f'Targets at {int(target_fdr*100)}% FDR')
+        ax.legend(markerscale=2)
+        ax.set_xlabel(f'Observed retention time ({rt_units})')
+        ax.set_ylabel(f'Predicted retention time ({rt_units})')
+        if visualize:
+            plt.show()
+            plt.close()
 
     def optimize_arbitrary_model(self,
                                  model,
