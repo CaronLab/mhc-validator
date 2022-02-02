@@ -1,4 +1,6 @@
 import os
+
+import pandas as pd
 from pyteomics import mzml
 import re
 import numpy as np
@@ -125,6 +127,16 @@ def write_training_file(peptides: Union[List[str], np.array],
     if encode_modifications:
         peptides = deepcopy(peptides)
         peptides = encode_peptide_modifications(peptides, modification_encoding=modification_encodings)
+
+    df = pd.DataFrame(columns=['x', 'y'])
+    df['x'] = peptides
+    df['y'] = retention_times
+
+    grouped = df.groupby(['x']).mean()
+
+    df2 = pd.DataFrame(columns=['x', 'y'])
+    df2['x'] = list(grouped.index)
+    df2['y'] = grouped['x']
 
     with open(path, 'w') as f:
         f.write('x\ty\n')
