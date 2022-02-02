@@ -3,6 +3,7 @@ from typing import Union, List, Type
 from copy import deepcopy
 import numpy as np
 from tqdm import tqdm
+from collections import Counter
 
 
 def remove_modifications(peptides: Union[List[str], str, Type[np.array]]):
@@ -76,3 +77,73 @@ def encode_peptide_modifications(peptides: Union[List[str], Type[np.array]], mod
 
 def clean_peptide_sequences(peptides: List[str]) -> List[str]:
     return remove_modifications(remove_previous_and_next_aa(peptides))
+
+
+def resolve_duplicates_between_splits(index1, index2, peptides, k: int, random_seed=0):
+
+    #### PROBLEM: SOME OF THE PSMS END UP NEVER BEING IN THE PREDICTION SPLIT
+    #### I HAVE MESSED UP THE K_FOLDS HERE, NEED TO FIX!!!!!!!
+
+    rs = np.random.RandomState(random_seed)
+    new_index1 = []
+    new_index2 = []
+
+    set1_peps = set([peptides[i] for i in index1])
+    set2_peps = set([peptides[i] for i in index2])
+
+    duplicates = set1_peps & set2_peps
+    set1_unique_peps = set1_peps - set2_peps
+    set2_unique_peps = set2_peps - set1_peps
+
+    newly_added_set1_peps = []
+    newly_added_set2_peps = []
+
+    i = rs.randint(1e6)
+    for idx in index1:
+        p = peptides[idx]
+        if p in duplicates:
+            if p in newly_added_set1_peps:
+                new_index1.append(idx)
+            elif p in newly_added_set2_peps:
+                new_index2.append(idx)
+            else:
+                new_index1.append(idx)
+                newly_added_set1_peps.append(p)
+                '''if i % k == 0:
+                    new_index1.append(idx)
+                    newly_added_set1_peps.append(p)
+                else:
+                    new_index2.append(idx)
+                    newly_added_set2_peps.append(p)
+                i += 1'''
+        else:
+            new_index1.append(idx)
+
+    for idx in index2:
+        p = peptides[idx]
+        if p in duplicates:
+            if p in newly_added_set1_peps:
+                new_index1.append(idx)
+            elif p in newly_added_set2_peps:
+                new_index2.append(idx)
+        else:
+            new_index2.append(idx)
+
+    assert set(new_index1) | set(new_index2) == set(index1) | set(index2)
+
+    new_index1 = np.array(new_index1, dtype=int)
+    new_index2 = np.array(new_index2, dtype=int)
+
+    return new_index1, new_index2
+
+
+def resolve_missing_peptides_in_k_folds(k_folds_splits, peptides):
+    # GOAL: find in which sets each duplicate peptide sequence is present.
+    psm_presence = {i: set() for i in range(len(peptides))}
+
+    for index1, index2 in k_folds_splits:
+        for i, idx in enumerate([set(index1), set(index2)]):
+            for scan in range(len(peptides)):
+                if scan in idx:
+                    psm_presence[scan].add(i)
+
