@@ -38,10 +38,11 @@ def pepxml_to_mhcv(pepxml_file: Union[str, PathLike],
     pepxml_dict = pepxml_to_dict(pepxml_file=pepxml_file)
 
     print('Converting to MHCV format')
-    pepxml_dict_to_mhcv(pepxml_dict=pepxml_dict,
-                        destination=destination,
-                        decoy_prefix=decoy_prefix,
-                        split_output=split_output)
+    mhcv_files = pepxml_dict_to_mhcv(pepxml_dict=pepxml_dict,
+                                     destination=destination,
+                                     decoy_prefix=decoy_prefix,
+                                     split_output=split_output)
+    return mhcv_files
 
 
 def pepxml_to_dict(pepxml_file: Union[str, PathLike]) -> dict:
@@ -63,8 +64,7 @@ def pepxml_dict_to_mhcv(pepxml_dict: Union[dict, OrderedDict], destination: Unio
     """
     Parse a dictionary returned by pepxml_to_dict and write a MHCV file compatible with MhcValidator (and Percolator).
     :param pepxml_dict: The dictionary returned by a call to pepxml_to_dict
-    :return: A Pandas DataFrame containing the search scores and any additional analysis results (e.g. PeptideProphet,
-    iProphet) from the original pepXML file.
+    :return: None
     """
 
     destination: Path = Path(destination)
@@ -269,7 +269,10 @@ def pepxml_dict_to_mhcv(pepxml_dict: Union[dict, OrderedDict], destination: Unio
                 for spectrum in scans.values():
                     f.write('\t'.join([spectrum[h] for h in header]) + '\n')
 
+        return [destination]
+
     else:
+        fouts = []
         for run, scans in outputs.items():
             header = headers[run]
             fout = destination.parent / f'{destination.stem.split(".")[0]}_{run}.mhcv'
@@ -277,3 +280,6 @@ def pepxml_dict_to_mhcv(pepxml_dict: Union[dict, OrderedDict], destination: Unio
                 f.write('\t'.join(header) + '\n')
                 for spectrum in scans.values():
                     f.write('\t'.join([spectrum[h] for h in header]) + '\n')
+            fouts.append(fout)
+
+        return fouts
