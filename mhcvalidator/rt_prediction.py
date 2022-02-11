@@ -136,7 +136,7 @@ def write_training_file(peptides: Union[List[str], np.array],
 
     df2 = pd.DataFrame(columns=['x', 'y'])
     df2['x'] = list(grouped.index)
-    df2['y'] = grouped['x']
+    df2['y'] = grouped['y']
 
     with open(path, 'w') as f:
         f.write('x\ty\n')
