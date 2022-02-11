@@ -42,6 +42,7 @@ from inspect import signature
 from matplotlib.cm import get_cmap
 from mhcvalidator.rt_prediction import train_predict as train_predict_rt
 from mhcvalidator.rt_prediction import extract_rt
+from mhcvalidator.pepxml_parser import pepxml_to_mhcv
 
 deprecation._PRINT_DEPRECATION_WARNINGS = False
 
@@ -1143,6 +1144,80 @@ class MhcValidator:
             return output, {'predictions': deepcopy(self.predictions),
                             'qs': deepcopy(self.qs),
                             'roc': deepcopy(self.roc)}
+
+    def proph_run(self,
+                  prophet_file,
+                  model,
+                  decoy_prefix: str = 'rev_',
+                  model_fit_function='fit',
+                  model_predict_function='predict',
+                  post_prediction_fn=lambda x: x,
+                  additional_training_data_for_model=None,
+                  return_prediction_data_and_model: bool = False,
+                  n_splits: int = 3,
+                  early_stopping_patience: int = 10,
+                  weight_by_inverse_peptide_counts: bool = True,
+                  visualize: bool = True,
+                  random_seed: int = None,
+                  clear_session: bool = True,
+                  alternate_labels=None,
+                  initial_model_weights: str = None,
+                  fit_model: bool = True,
+                  fig_pdf: Union[str, PathLike] = None,
+                  report_directory: Union[str, PathLike] = None,
+                  **kwargs):
+
+        now = str(datetime.now()).replace(' ', '_').replace(':', '-')
+        prophet_file = Path(prophet_file)
+        if report_directory is None:
+            report_directory = prophet_file.parent / f'{prophet_file.stem.split(".")[0]}_MhcValidator_{now}'
+
+        mhcv_files = pepxml_to_mhcv(prophet_file,
+                                    report_directory,
+                                    decoy_prefix=decoy_prefix,
+                                    split_output=True)
+
+        if isinstance(model, keras.Model):
+            initial_model_weights = str(self.model_dir / f'mhcvalidator_initial_weights_{now}.h5')
+            model.save(initial_model_weights)
+        else:
+            initial_model_weights = ''
+
+        run_results = {}
+
+        for mhcv_file in mhcv_files:
+            run_report_dir = report_directory / mhcv_file.stem
+            self.load_data(filepath=mhcv_file,
+                           filetype='mhcv')
+            self.encode_peptide_sequences()
+
+            if isinstance(model, keras.Model):
+                model.load_weights(initial_model_weights)
+
+            self.run(model,
+                     model_fit_function,
+                     model_predict_function,
+                     post_prediction_fn,
+                     additional_training_data_for_model,
+                     return_prediction_data_and_model,
+                     n_splits,
+                     early_stopping_patience,
+                     weight_by_inverse_peptide_counts,
+                     visualize,
+                     random_seed,
+                     clear_session,
+                     alternate_labels,
+                     initial_model_weights,
+                     fit_model,
+                     fig_pdf,
+                     report_directory=run_report_dir,
+                     **kwargs)
+
+            run_results[mhcv_file.name] = self.raw_data.copy(deep=True)
+
+
+
+
 
     def get_highest_scoring_PSMs(self):
         """
