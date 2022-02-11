@@ -10,3 +10,4 @@ matplotlib
 scipy
 scikit-learn
 deeplc
+xmltodict

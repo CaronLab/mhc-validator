@@ -179,21 +179,19 @@ class MhcValidator:
         """
 
         if filetype == 'auto':
-            if str(filepath).lower().endswith('pin'):
+            if str(filepath).lower().endswith('pin') or str(filepath).lower().endswith('mhcv'):
                 filetype = 'pin'
             elif str(filepath).lower().endswith('pepxml'):
                 filetype = 'tandem'
             elif str(filepath).lower().endswith('pep.xml'):
                 filetype = 'pepxml'
-            elif str(filepath).lower().endswith('mzid'):
-                filetype = 'mzid'
             else:
                 raise ValueError('File type could not be inferred from filename. You must explicitly specify the '
                                  'filetype.')
         else:
-            if filetype not in ['auto', 'pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine']:
+            if filetype not in ['auto', 'pin', 'pepxml', 'tabular', 'mhcv']:
                 raise ValueError("filetype must be one of "
-                                 "{'auto', 'pin', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine'}")
+                                 "{'auto', 'pin', 'pepxml', 'tabular', 'mhcv'}")
 
         print(f'MHC class: {self.mhc_class if self.mhc_class else "not specified"}')
         print(f'Alleles: {self.alleles if self.alleles else "not specified"}')
@@ -210,10 +208,10 @@ class MhcValidator:
             self.peptides = list(self.raw_data[peptide_column])
         elif filetype == 'pin':
             self.peptides = list(self.raw_data['Peptide'])
-        elif filetype == 'mzid':
-            self.peptides = list(self.raw_data['PeptideSequence'])
-        elif filetype == 'spectromine':
-            self.peptides = list(self.raw_data['PEP.StrippedSequence'])
+        #elif filetype == 'mzid':
+        #    self.peptides = list(self.raw_data['PeptideSequence'])
+        #elif filetype == 'spectromine':
+        #    self.peptides = list(self.raw_data['PEP.StrippedSequence'])
         else:
             if 'peptide' in self.raw_data.columns:
                 self.peptides = list(self.raw_data['peptide'])
@@ -1145,6 +1143,16 @@ class MhcValidator:
             return output, {'predictions': deepcopy(self.predictions),
                             'qs': deepcopy(self.qs),
                             'roc': deepcopy(self.roc)}
+
+    def get_highest_scoring_PSMs(self):
+        """
+        Placeholder for now. It might be used for getting a single PSMs per spectrum if I implement running iProphet
+        files.
+        :return:
+        """
+        # here's something that will be handy
+        idx = self.raw_data.groupby(['ScanNr'])['mhcv_prob'].transform(max) == self.raw_data['mhcv_prob']
+        df = self.raw_data[idx]  # this is the highest scoring PSM per spectrum
 
     def plot_retention_time_correlation(self,
                                         target_fdr: float = 0.01,
