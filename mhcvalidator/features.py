@@ -89,13 +89,13 @@ def prepare_features(data, filetype, use_features: Union[List[str], None]):
     :param use_features:
     :return:
     """
-    if filetype not in ['pin', 'pout', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine']:
-        raise ValueError("filetype must be one of ['pin', 'pout', 'pepxml', 'tabular', 'mzid', 'tandem', 'spectromine']")
+    if filetype not in ['pin', 'pepxml', 'tabular', 'tandem', 'mhcv']:
+        raise ValueError("filetype must be one of ['pin', 'pepxml', 'tabular', 'mhcv']")
     if filetype == 'pepxml':
         return prepare_pepxml_features(data, use_features)
     elif filetype == 'mzid':
         return prepare_mzid_features(data, use_features)
-    elif filetype == 'pin':
+    elif filetype == 'pin' or filetype == 'mhcv':
         return prepare_pin_features(data, use_features)
     elif filetype == 'pout':
         return prepare_pout_features(data, use_features)

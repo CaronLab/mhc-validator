@@ -237,7 +237,7 @@ def run():
             additional_data = None
 
         v.run(model=model,
-              additional_training_data_for_model=additional_data,
+              additional_training_data=additional_data,
               epochs=args.epochs,
               batch_size=args.batch_size,
               early_stopping_patience=args.stopping_patience,

@@ -379,11 +379,11 @@ def load_file(filename: Union[str, PathLike],
     :param file_sep:
     :return:
     """
-    if filetype not in ['pin', 'pepxml', 'tabular', 'tandem']:
+    if filetype not in ['pin', 'pepxml', 'tabular', 'tandem', 'mhcv']:
         raise ValueError("filetype must be one of "
-                         "{'auto', 'pin', 'pepxml', 'tabular', 'tandem'}")
+                         "{'auto', 'pin', 'pepxml', 'tabular', 'tandem', 'mhcv}")
 
-    if filetype == 'pin':
+    if filetype == 'pin' or filetype == 'mhcv':
         df = load_pin_data(filename, decoy_tag=decoy_tag, protein_column=protein_column, tag_is_prefix=tag_is_prefix)
         pep_col = 'peptide' if 'peptide' in df else 'Peptide'
     elif filetype == 'pepxml':

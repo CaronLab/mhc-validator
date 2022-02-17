@@ -751,11 +751,11 @@ class MhcValidator:
         ax.set_yticks([])
 
     def run(self,
-            model,
+            model='BASIC',
             model_fit_function='fit',
             model_predict_function='predict',
             post_prediction_fn=lambda x: x,
-            additional_training_data_for_model=None,
+            additional_training_data=None,
             return_prediction_data_and_model: bool = False,
             n_splits: int = 3,
             early_stopping_patience: int = 10,
@@ -776,12 +776,15 @@ class MhcValidator:
         """
         Run the validation algorithm.
 
-        :param model: The model to train on the target/decoy data.
+        :param model: The model to train on the target/decoy data. Can be a Python object with a fit and predict
+        function, or string in {'BASIC', 'SEQUENCE_ENCODING'}. BASIC will load the basic fully-connected neural
+        network supported by MhcValidator, while SEQUENCE_ENCODING will load the neural network which also performs
+        convolutional peptide sequence encoding. Default is 'BASIC'.
         :param model_fit_function: The function which fits the model. Default is 'fit'.
         :param model_predict_function: The function used to make predictions with the fitted model. Default is 'predict'.
         :param post_prediction_fn: A function applied to the output of the predict function. Useful if the output is
         multidimensional, as all downstream processes expect a probability between 0 and 1.
-        :param additional_training_data_for_model: Additional data for training the model. Only used if the model
+        :param additional_training_data: Additional data for training the model. Only used if the model
         expects two inputs. If you are using the provided neural network which encodes peptide sequences, then you must
         pass self.X_encoded_peps.
         :param return_prediction_data_and_model: Whether to return predictions, q-values, etc in a dictionary. This
@@ -813,8 +816,21 @@ class MhcValidator:
             random_seed = self.random_seed
         self._set_seed(random_seed)
 
+        if model == 'BASIC':
+            model_args = {key: arg for key, arg in kwargs.items() if key in signature(self.get_nn_model).parameters}
+            kwargs = {key: arg for key, arg in kwargs.items() if key not in model_args}
+            model = self.get_nn_model(**model_args)
+        elif model == 'SEQUENCE_ENCODING':
+            model_args = {key: arg for key, arg in kwargs.items() if key in
+                          signature(self.get_nn_model_with_sequence_encoding()).parameters}
+            kwargs = {key: arg for key, arg in kwargs.items() if key not in model_args}
+            model = self.get_nn_model_with_sequence_encoding(**model_args)
+            if self.encoded_peptides is None:
+                self.encode_peptide_sequences()
+            additional_training_data = self.encoded_peptides
+
         if initial_model_weights is not None:
-            model.load(initial_model_weights)
+            model.load_weights(initial_model_weights)
 
         # check if the model is a Keras model, and if so check if number of epochs and batch size have been specified.
         # If they haven't set them to default values of 30 and 512, respectively. Otherwise things will go poorly.
@@ -909,20 +925,20 @@ class MhcValidator:
             else:
                 weights = np.ones_like(labels[train_index][mask][rnd_idx])
 
-            if additional_training_data_for_model is not None:
-                additional_training_data_for_model = deepcopy(additional_training_data_for_model)
-                x2_train = additional_training_data_for_model[train_index][mask][rnd_idx]
-                x2_test = additional_training_data_for_model[predict_index]
+            if additional_training_data is not None:
+                additional_training_data = deepcopy(additional_training_data)
+                x2_train = additional_training_data[train_index][mask][rnd_idx]
+                x2_test = additional_training_data[predict_index]
                 input_scalar2 = NDStandardScaler()
                 input_scalar2 = input_scalar2.fit(x2_train)
 
                 x2_train = input_scalar2.transform(x2_train)
                 x2_test = input_scalar2.transform(x2_test)
-                additional_training_data_for_model = input_scalar2.transform(additional_training_data_for_model)
+                additional_training_data = input_scalar2.transform(additional_training_data)
 
                 x_train = (x_train, x2_train)
                 x_predict = (x_predict, x2_test)
-                x = (x, additional_training_data_for_model)
+                x = (x, additional_training_data)
 
             model_fit_parameters = eval(f'signature(model.{model_fit_function})').parameters
             if 'validation_data' in model_fit_parameters.keys():
@@ -1147,7 +1163,7 @@ class MhcValidator:
 
     def proph_run(self,
                   prophet_file,
-                  model,
+                  model = 'BASIC',
                   decoy_prefix: str = 'rev_',
                   model_fit_function='fit',
                   model_predict_function='predict',
@@ -1177,22 +1193,15 @@ class MhcValidator:
                                     decoy_prefix=decoy_prefix,
                                     split_output=True)
 
-        if isinstance(model, keras.Model):
-            initial_model_weights = str(self.model_dir / f'mhcvalidator_initial_weights_{now}.h5')
-            model.save(initial_model_weights)
-        else:
-            initial_model_weights = ''
-
         run_results = {}
+
+        results = pd.DataFrame()
 
         for mhcv_file in mhcv_files:
             run_report_dir = report_directory / mhcv_file.stem
             self.load_data(filepath=mhcv_file,
                            filetype='mhcv')
             self.encode_peptide_sequences()
-
-            if isinstance(model, keras.Model):
-                model.load_weights(initial_model_weights)
 
             self.run(model,
                      model_fit_function,
@@ -1214,10 +1223,32 @@ class MhcValidator:
                      **kwargs)
 
             run_results[mhcv_file.name] = self.raw_data.copy(deep=True)
+            results = results.append(self.raw_data, ignore_index=True)
 
+        idx = results.groupby(['SpecId'])['mhcv_prob'].transform(max) == results['mhcv_prob']
+        results = results[idx]
+        results.reset_index(inplace=True)
 
+        results['mhcv_q-value'] = calculate_qs(results['mhcv_prob'], results['mhcv_label'], higher_better=True)
+        qs, _, pep_labels, peps, _ = calculate_peptide_level_qs(results['mhcv_prob'], results['mhcv_label'],
+                                                                results['mhcv_peptide'], higher_better=True)
+        peptide_level_qs = {p: q for p, q in zip(peps, qs)}
+        results['mhcv_pep-level_q-value'] = results['mhcv_peptide'].apply(lambda x: peptide_level_qs[x])
 
+        self.raw_data = results
+        self.qs = results['mhcv_q-value'].values
+        self.labels = results['mhcv_label'].values
+        self.predictions = results['mhcv_prob'].values
 
+        n_psms = np.sum((self.qs <= 0.01) & (self.labels == 1))
+        n_peps = np.sum((qs <= 0.01) & (pep_labels == 1))
+
+        report = ("=============== MhcValidator Prophet Report ===============\n"
+                  f" | PSMs validated at 1% FDR: {n_psms}\n"
+                  f" | Peptides validated at 1% FDR (peptide-level): {n_peps}\n"
+                  f"===========================================================")
+
+        return run_results
 
     def get_highest_scoring_PSMs(self):
         """
@@ -1301,7 +1332,7 @@ class MhcValidator:
                                              model_fit_function=model_fit_function,
                                              model_predict_function=model_predict_function,
                                              post_prediction_fn=post_prediction_fn,
-                                             additional_training_data_for_model=additional_training_data_for_model,
+                                             additional_training_data=additional_training_data_for_model,
                                              return_prediction_data_and_model=True,
                                              visualize=visualize_trials,
                                              **run_params,
@@ -1356,7 +1387,7 @@ class MhcValidator:
                            model_fit_function=model_fit_function,
                            model_predict_function=model_predict_function,
                            post_prediction_fn=post_prediction_fn,
-                           additional_training_data_for_model=additional_training_data_for_model,
+                           additional_training_data=additional_training_data_for_model,
                            return_prediction_data_and_model=True,
                            visualize=visualize_best,
                            **run_params,
