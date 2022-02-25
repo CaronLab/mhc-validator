@@ -1184,6 +1184,12 @@ class MhcValidator:
                   report_directory: Union[str, PathLike] = None,
                   **kwargs):
 
+        """Experimental! Loads PeptideProphet or iProphet files, splits them into individual experiments (keeping
+        all respective search engine scores and Prophet scores), processes each with MhcValidator, keeps best scoring
+        PSMs for each MS scan in the dataset, calculates q-values on the combined results. We have done no validation
+        of this function whatsoever, but feel free to play around with it so long as you don't actually use the
+        results at this point."""
+
         now = str(datetime.now()).replace(' ', '_').replace(':', '-')
         prophet_file = Path(prophet_file)
         if report_directory is None:
