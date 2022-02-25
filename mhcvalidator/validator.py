@@ -1,5 +1,4 @@
 import os
-import numpy
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import numpy.random
 import pandas as pd
@@ -43,6 +42,7 @@ from matplotlib.cm import get_cmap
 from mhcvalidator.rt_prediction import train_predict as train_predict_rt
 from mhcvalidator.rt_prediction import extract_rt
 from mhcvalidator.pepxml_parser import pepxml_to_mhcv
+from mhcvalidator.datasets import k_fold_split
 
 deprecation._PRINT_DEPRECATION_WARNINGS = False
 
@@ -857,9 +857,10 @@ class MhcValidator:
         # e.g. we calculate q-values for expect value and MHC predictions, and make sure we include good examples
         # from each allele.
         # stratification_labels = self.get_stratification_labels()
-        skf = list(StratifiedKFold(n_splits=n_splits,
+        '''skf = list(StratifiedKFold(n_splits=n_splits,
                                    random_state=random_seed,
-                                   shuffle=True).split(all_data, labels))
+                                   shuffle=True).split(all_data, labels))'''
+        skf = k_fold_split(peptides=peptides, k_folds=n_splits, random_state=random_seed)
 
         predictions = np.zeros_like(labels, dtype=float)
         k_splits = np.zeros_like(labels, dtype=int)
@@ -1312,7 +1313,7 @@ class MhcValidator:
         if random_seed is None:
             random_seed = self.random_seed
         self._set_seed()
-        fmin_rstate = numpy.random.default_rng(random_seed)
+        fmin_rstate = np.random.default_rng(random_seed)
         if additional_fit_kwargs is None:
             additional_fit_kwargs = {}
         if additional_model_kwargs is None:
@@ -1492,7 +1493,7 @@ class MhcValidator:
         if random_seed is None:
             random_seed = self.random_seed
         self._set_seed()
-        fmin_rstate = numpy.random.default_rng(random_seed)
+        fmin_rstate = np.random.default_rng(random_seed)
 
         space = [hp.uniformint('sequence_encoding_epochs', *epoch_range),
                  hp.choice('sequence_encoding_batch_size', batch_size_space),
@@ -1559,7 +1560,7 @@ class MhcValidator:
         if random_seed is None:
             random_seed = self.random_seed
         self._set_seed()
-        fmin_rstate = numpy.random.default_rng(random_seed)
+        fmin_rstate = np.random.default_rng(random_seed)
 
         space = [hp.quniform('num_trees', *n_trees_range, 10),
                  hp.choice('max_depth', max_depth_space),
