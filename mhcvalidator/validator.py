@@ -707,6 +707,7 @@ class MhcValidator:
         :return: A compiled keras.Model
         """
         optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
+        max_len = self.max_len if self.mhc_class == 'I' else self.max_len * 2
         model = get_model_with_peptide_encoding(ms_feature_length=self.feature_matrix.shape[1],
                                                 dropout=dropout,
                                                 hidden_layers_after_convolutions=hidden_layers,
@@ -716,7 +717,7 @@ class MhcValidator:
                                                 n_filters=n_filters,
                                                 filter_stride=filter_stride,
                                                 n_encoded_sequence_features=n_encoded_sequence_features,
-                                                max_pep_length=self.max_len
+                                                max_pep_length=max_len
                                                 )
         model.compile(optimizer=optimizer, loss=loss_fn)
 
@@ -762,7 +763,7 @@ class MhcValidator:
             #q_value_subset: float = 1.0,
             #features_for_subset: Union[List[str], str] = 'all',
             #subset_threshold: int = 1,
-            weight_by_inverse_peptide_counts: bool = True,
+            weight_by_inverse_peptide_counts: bool = False,
             visualize: bool = True,
             random_seed: int = None,
             clear_session: bool = True,
