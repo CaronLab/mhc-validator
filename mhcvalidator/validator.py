@@ -446,7 +446,7 @@ class MhcValidator:
         self.feature_matrix = self.feature_matrix.join(preds)
     '''
 
-    def add_all_available_predictions(self, verbose_errors: bool = False):
+    def add_all_available_predictions(self, verbose_errors: bool = True):
         """
         Try to run both MhcFlurry and NetMHCpan and add their predictions to the training features.
 
