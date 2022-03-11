@@ -94,7 +94,7 @@ class MhcValidator:
 
     def set_mhc_params(self,
                        alleles: Union[str, List[str]] = None,
-                       mhc_class: str = None,
+                       mhc_class: str = 'I',
                        max_pep_len: int = None,
                        min_pep_len: int = None) -> None:
         """
@@ -265,7 +265,7 @@ class MhcValidator:
         self._check_peptide_lengths()
 
         # self.raw_data.drop(columns=['Label'], inplace=True)
-        self.loaded_filetype = 'pout'
+        self.loaded_filetype = 'tabular'
         self.filename = (Path(targets_pout).name, Path(decoys_pout).name)
         self.filepath = (Path(targets_pout).expanduser().resolve(), Path(decoys_pout).expanduser().resolve())
 
