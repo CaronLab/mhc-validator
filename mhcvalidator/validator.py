@@ -20,7 +20,7 @@ from mhcvalidator.fdr import calculate_qs, calculate_peptide_level_qs, calculate
 import matplotlib.pyplot as plt
 from mhcflurry.encodable_sequences import EncodableSequences
 from mhcvalidator.models import get_model_without_peptide_encoding, get_model_with_peptide_encoding
-from mhcvalidator.peptides import clean_peptide_sequences, resolve_duplicates_between_splits
+from mhcvalidator.peptides import clean_peptide_sequences
 from mhcvalidator.nd_standard_scalar import NDStandardScaler
 from mhcnames import normalize_allele_name
 from copy import deepcopy
@@ -880,13 +880,6 @@ class MhcValidator:
             print('-----------------------------------')
             print(f'Training on split {k_fold+1}')
             self._set_seed(random_seed)
-
-            # make sure peptide sequences aren't duplicated bewtween train and test sets
-            '''train_index, predict_index = resolve_duplicates_between_splits(index1=train_index,
-                                                                           index2=predict_index,
-                                                                           peptides=peptides,
-                                                                           k=n_splits,
-                                                                           random_seed=random_seed)'''
 
             if isinstance(model, keras.Model):
                 model.load_weights(initial_model_weights)
