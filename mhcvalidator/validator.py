@@ -823,7 +823,7 @@ class MhcValidator:
             model = self.get_nn_model(**model_args)
         elif model == 'SEQUENCE_ENCODING':
             model_args = {key: arg for key, arg in kwargs.items() if key in
-                          signature(self.get_nn_model_with_sequence_encoding()).parameters}
+                          signature(self.get_nn_model_with_sequence_encoding).parameters}
             kwargs = {key: arg for key, arg in kwargs.items() if key not in model_args}
             model = self.get_nn_model_with_sequence_encoding(**model_args)
             if self.encoded_peptides is None:
