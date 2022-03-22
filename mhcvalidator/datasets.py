@@ -18,6 +18,7 @@ def k_fold_split(peptides: Iterable[str],
     unique_peptide_indices = []
     nonunique_peptide_indices = {}
 
+    # make lists of unique and non-unique peptide indices.
     for i, pep in enumerate(peptides):
         if peptide_counts[i] == 1:
             unique_peptide_indices.append(i)
@@ -39,9 +40,11 @@ def k_fold_split(peptides: Iterable[str],
         train_indices.append((unique_peptide_indices[0: k*split_size] +
                               unique_peptide_indices[k*split_size + split_size:]))
 
-    # now we need to add the peptides with more than one PSM. We make sure all the PSMs of a given peptide end up in
-    # a single validation set, and distributed among the training sets of other splits
-    k = list(range(k_folds))  # randomly get one of the splits to start
+    # now we need to add the peptides with more than one PSM. We make sure the PSMs of a given peptide do not end up
+    # in both the training and validation sets of a given split
+
+    # randomly get one of the splits to start
+    k = list(range(k_folds))
     random_state.shuffle(k)
     k = cycle(k)
     for indices in nonunique_peptide_indices.values():
