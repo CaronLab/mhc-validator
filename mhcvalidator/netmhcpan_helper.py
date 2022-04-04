@@ -249,6 +249,7 @@ class NetMHCpanHelper:
 
     def _parse_netmhc_output(self, stdout: str):
         lines = stdout.split('\n')
+        reverse_lookup = {value: key for key, value in self.netmhcpan_peptides.items()}
         if self.mhc_class == 'I':
             allele_idx = 1
             peptide_idx = 2
@@ -289,7 +290,7 @@ class NetMHCpanHelper:
             else:
                 binder = 'Non-binder'
 
-            self.predictions[peptide][allele] = {'el_rank': el_rank,
+            self.predictions[reverse_lookup[peptide]][allele] = {'el_rank': el_rank,
                                                  'el_score': el_score,
                                                  'aff_rank': aff_rank,
                                                  'aff_score': aff_score,
