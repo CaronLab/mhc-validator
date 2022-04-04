@@ -141,6 +141,7 @@ def calculate_roc(qs,
                   labels,
                   qvalue_cutoff: float = 0.05):
     qs = np.array(qs, dtype=float)
+    labels = np.array(labels, dtype=int)
 
     qs = qs[(labels == 1) & (qs <= qvalue_cutoff)]
     sort_idx = np.argsort(qs)
