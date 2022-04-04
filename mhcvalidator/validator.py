@@ -998,7 +998,6 @@ class MhcValidator:
                                                                                              self.peptides[predict_index])
 
             print(f' | PSMs in this split validated at 1% FDR: {np.sum((predict_qs <= 0.01) & (predict_labels == 1))}')
-            print(f' | Extrapolated to whole dataset: {np.sum((predict_qs <= 0.01) & (predict_labels == 1)) * n_splits}')
             print(f' | Peptides in this split validated at 1% FDR (peptide-level): '
                   f'{np.sum((pep_level_qs <= 0.01) & (pep_level_labels == 1))}')
             print('-----------------------------------')
