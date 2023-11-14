@@ -1,7 +1,7 @@
 mhcflurry>=2.0.2
 tensorflow
 tensorflow_probability
-numpy
+numpy<1.24
 pandas
 mhcnames
 pyteomics
