@@ -752,7 +752,7 @@ class MhcValidator:
         ax.set_yticks([])
 
     def run(self,
-            model='BASIC',
+            model='MhcValidator',
             model_fit_function='fit',
             model_predict_function='predict',
             post_prediction_fn=lambda x: x,
@@ -772,13 +772,18 @@ class MhcValidator:
             fit_model: bool = True,
             fig_pdf: Union[str, PathLike] = None,
             report_directory: Union[str, PathLike] = None,
+            mhcflurry: bool = True,
+            netmhcpan: bool = True,
+            sequence_encoding: bool = False,
             **kwargs):
 
         """
         Run the validation algorithm.
 
         :param model: The model to train on the target/decoy data. Can be a Python object with a fit and predict
-        function, or string in {'BASIC', 'SEQUENCE_ENCODING'}. BASIC will load the basic fully-connected neural
+        function, or string in {'NNValidator', 'MhcValidator'}. 'MhcValidator' causes predictions by MhcFlurry and
+         NetMHCpan to be added to the feature matrix (if the respective arguments to `run` are set to True).
+         NNValidator does not add the predictions.
         network supported by MhcValidator, while SEQUENCE_ENCODING will load the neural network which also performs
         convolutional peptide sequence encoding. Default is 'BASIC'.
         :param model_fit_function: The function which fits the model. Default is 'fit'.
@@ -829,6 +834,39 @@ class MhcValidator:
             if self.encoded_peptides is None:
                 self.encode_peptide_sequences()
             additional_training_data = self.encoded_peptides
+
+        if model.lower() == 'nnvalidator' and not sequence_encoding:
+            model_args = {key: arg for key, arg in kwargs.items() if key in signature(self.get_nn_model).parameters}
+            kwargs = {key: arg for key, arg in kwargs.items() if key not in model_args}
+            model = self.get_nn_model(**model_args)
+        elif model.lower() == 'mhcvalidator' and not sequence_encoding:
+            model_args = {key: arg for key, arg in kwargs.items() if key in signature(self.get_nn_model).parameters}
+            kwargs = {key: arg for key, arg in kwargs.items() if key not in model_args}
+            model = self.get_nn_model(**model_args)
+            if mhcflurry:
+                self.add_mhcflurry_predictions()
+            if netmhcpan:
+                self.add_netmhcpan_predictions()
+        elif model.lower() == 'nnvalidator' and sequence_encoding:
+            model_args = {key: arg for key, arg in kwargs.items() if key in
+                          signature(self.get_nn_model_with_sequence_encoding).parameters}
+            kwargs = {key: arg for key, arg in kwargs.items() if key not in model_args}
+            model = self.get_nn_model_with_sequence_encoding(**model_args)
+            if self.encoded_peptides is None:
+                self.encode_peptide_sequences()
+            additional_training_data = self.encoded_peptides
+        elif model.lower() == 'mhcvalidator' and sequence_encoding:
+            model_args = {key: arg for key, arg in kwargs.items() if key in
+                          signature(self.get_nn_model_with_sequence_encoding).parameters}
+            kwargs = {key: arg for key, arg in kwargs.items() if key not in model_args}
+            model = self.get_nn_model_with_sequence_encoding(**model_args)
+            if self.encoded_peptides is None:
+                self.encode_peptide_sequences()
+            additional_training_data = self.encoded_peptides
+            if mhcflurry:
+                self.add_mhcflurry_predictions()
+            if netmhcpan:
+                self.add_netmhcpan_predictions()
 
         if initial_model_weights is not None:
             model.load_weights(initial_model_weights)
