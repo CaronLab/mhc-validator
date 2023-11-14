@@ -33,4 +33,9 @@ validator.run(sequence_encoding=True)
 # To run in MV+MHC+PE configuration (same as MV+PE, but also with NetMHCpan and/or MhcFlurry predictions added 
 # to the standard PIN features), do this:
 validator.run(sequence_encoding=True, netmhcpan=True, mhcflurry=True)
+
+# An important argument for the `run` function is "report_directory". Setting this tells MhcValidator to
+# save information about the model fitting as well as the predictions results into this directory
+# For example:
+validator.run(report_directory="/path/to/results/directory")
 ```
