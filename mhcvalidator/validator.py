@@ -772,8 +772,8 @@ class MhcValidator:
             fit_model: bool = True,
             fig_pdf: Union[str, PathLike] = None,
             report_directory: Union[str, PathLike] = None,
-            mhcflurry: bool = True,
-            netmhcpan: bool = True,
+            mhcflurry: bool = False,
+            netmhcpan: bool = False,
             sequence_encoding: bool = False,
             **kwargs):
 
