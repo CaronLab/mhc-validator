@@ -822,47 +822,19 @@ class MhcValidator:
             random_seed = self.random_seed
         self._set_seed(random_seed)
 
-        if model == 'BASIC':
-            model_args = {key: arg for key, arg in kwargs.items() if key in signature(self.get_nn_model).parameters}
-            kwargs = {key: arg for key, arg in kwargs.items() if key not in model_args}
-            model = self.get_nn_model(**model_args)
-        elif model == 'SEQUENCE_ENCODING':
-            model_args = {key: arg for key, arg in kwargs.items() if key in
-                          signature(self.get_nn_model_with_sequence_encoding).parameters}
-            kwargs = {key: arg for key, arg in kwargs.items() if key not in model_args}
-            model = self.get_nn_model_with_sequence_encoding(**model_args)
-            if self.encoded_peptides is None:
-                self.encode_peptide_sequences()
-            additional_training_data = self.encoded_peptides
-
-        if model.lower() == 'nnvalidator' and not sequence_encoding:
-            model_args = {key: arg for key, arg in kwargs.items() if key in signature(self.get_nn_model).parameters}
-            kwargs = {key: arg for key, arg in kwargs.items() if key not in model_args}
-            model = self.get_nn_model(**model_args)
-        elif model.lower() == 'mhcvalidator' and not sequence_encoding:
-            model_args = {key: arg for key, arg in kwargs.items() if key in signature(self.get_nn_model).parameters}
-            kwargs = {key: arg for key, arg in kwargs.items() if key not in model_args}
-            model = self.get_nn_model(**model_args)
-            if mhcflurry:
-                self.add_mhcflurry_predictions()
-            if netmhcpan:
-                self.add_netmhcpan_predictions()
-        elif model.lower() == 'nnvalidator' and sequence_encoding:
-            model_args = {key: arg for key, arg in kwargs.items() if key in
-                          signature(self.get_nn_model_with_sequence_encoding).parameters}
-            kwargs = {key: arg for key, arg in kwargs.items() if key not in model_args}
-            model = self.get_nn_model_with_sequence_encoding(**model_args)
-            if self.encoded_peptides is None:
-                self.encode_peptide_sequences()
-            additional_training_data = self.encoded_peptides
-        elif model.lower() == 'mhcvalidator' and sequence_encoding:
-            model_args = {key: arg for key, arg in kwargs.items() if key in
-                          signature(self.get_nn_model_with_sequence_encoding).parameters}
-            kwargs = {key: arg for key, arg in kwargs.items() if key not in model_args}
-            model = self.get_nn_model_with_sequence_encoding(**model_args)
-            if self.encoded_peptides is None:
-                self.encode_peptide_sequences()
-            additional_training_data = self.encoded_peptides
+        if model.lower() == 'mhcvalidator':
+            if not sequence_encoding:
+                model_args = {key: arg for key, arg in kwargs.items() if key in signature(self.get_nn_model).parameters}
+                kwargs = {key: arg for key, arg in kwargs.items() if key not in model_args}
+                model = self.get_nn_model(**model_args)
+            else:
+                model_args = {key: arg for key, arg in kwargs.items() if key in
+                              signature(self.get_nn_model_with_sequence_encoding).parameters}
+                kwargs = {key: arg for key, arg in kwargs.items() if key not in model_args}
+                model = self.get_nn_model_with_sequence_encoding(**model_args)
+                if self.encoded_peptides is None:
+                    self.encode_peptide_sequences()
+                additional_training_data = self.encoded_peptides
             if mhcflurry:
                 self.add_mhcflurry_predictions()
             if netmhcpan:
