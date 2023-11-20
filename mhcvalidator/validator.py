@@ -822,6 +822,11 @@ class MhcValidator:
             random_seed = self.random_seed
         self._set_seed(random_seed)
 
+        if mhcflurry:
+            self.add_mhcflurry_predictions()
+        if netmhcpan:
+            self.add_netmhcpan_predictions()
+
         if model.lower() == 'mhcvalidator':
             if not sequence_encoding:
                 model_args = {key: arg for key, arg in kwargs.items() if key in signature(self.get_nn_model).parameters}
@@ -835,10 +840,6 @@ class MhcValidator:
                 if self.encoded_peptides is None:
                     self.encode_peptide_sequences()
                 additional_training_data = self.encoded_peptides
-            if mhcflurry:
-                self.add_mhcflurry_predictions()
-            if netmhcpan:
-                self.add_netmhcpan_predictions()
 
         if initial_model_weights is not None:
             model.load_weights(initial_model_weights)
