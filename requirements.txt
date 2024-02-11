@@ -1,5 +1,5 @@
 mhcflurry>=2.0.2
-tensorflow
+tensorflow==2.15
 tensorflow_probability
 numpy<1.24
 pandas
@@ -11,3 +11,4 @@ scipy
 scikit-learn
 deeplc
 xmltodict
+hyperopt
