@@ -25,7 +25,7 @@ cp ./NetMHCpan4.1_directory/netMHCpan ./PATH/TO/YOUR_MHCvalidator_FOLDER/venv/bi
 ```
 Now MHCvalidator can use NetMHCpan4.1 to make predictions and be used to its full potential.
 
-### Very very basic tutorial
+### Tutorial to use MHCvalidator based on an example file
 
 The first step is to set parameters and load data (database search results in PIN format)
 
