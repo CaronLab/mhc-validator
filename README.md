@@ -20,7 +20,7 @@ Do install NetMHCpan4.1 you have to go to 'https://services.healthtech.dtu.dk/cg
 
 After downloading NetMHCpan4.1 install as instructed in the readme file provided in the NetMHCpan4.1 download folder. When installed and tested on your local machine, copy the 'netMHCpan' file to the following folder:
 ```terminal
-../YOUR_MHCvalidator_FOLDER/venv/bin
+cp ./NetMHCpan4.1_directory/netMHCpan ./PATH/TO/YOUR_MHCvalidator_FOLDER/venv/bin
 ```
 Now MHCvalidator can use NetMHCpan4.1 to make predictions and be used to its full potential.
 
