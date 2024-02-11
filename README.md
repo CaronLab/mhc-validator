@@ -24,7 +24,10 @@ Now MHCvalidator can use NetMHCpan4.1 to make predictions and be used to its ful
 
 ### Tutorial to use MHCvalidator based on an example file
 
-The first step is to create a new python file (example: mhcvalidator_test.py) in you venv, then set parameters and load data (database search results in PIN format). In this example we provide 2 example data files (.pin files) that you downloaded when cloning the  mhc-validator repository. 
+The first step is to create a new python file (example: mhcvalidator_test.py) in you venv, then set parameters and load data (database search results in PIN format). In this example we use the data provided in the github.com/CaronLab/mhc-validator master branch that you pulled earlier. In other words you have the data already downloaded and everything shoul dbe ready to go!
+
+Now load the requ
+
 
 ```python
 from mhcvalidator import MhcValidator
