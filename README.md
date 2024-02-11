@@ -18,7 +18,8 @@ The above should install MHCvalidator.
 Now in order to fully use MHCvalidators capacity to implement MHC binding affinities you will have to manually install NetMHCpan4.1. You can run MHCvalidator without it by using only MHCflurry (Which was installed from the requirments.txt), but as described in our publication we suggest to also use NetMHCpan4.1 to achieve the full potential of MHCvalidator. 
 Do install NetMHCpan4.1 you have to go to 'https://services.healthtech.dtu.dk/cgi-bin/sw_request?software=netMHCpan&version=4.1&packageversion=4.1b&platform=Linux' and download NetMHCpan4.1 for Linux as described on the website. A general overview of  NetMHCpan4.1 can be found here: 'https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/'. 
 
-After downloading NetMHCpan4.1 install as instructed in the readme file provided in the NetMHCpan4.1 download folder. When installed and tested on your local machine, copy the 'netMHCpan' file to the following folder:
+After downloading NetMHCpan4.1 install as instructed in the readme file provided in the NetMHCpan4.1 download folder. When installed and tested on your local machine, copy the 'netMHCpan' file to the following folder: ./YOUR_MHCvalidator_FOLDER/venv/bin , for example you can do as follows:
+
 ```terminal
 cp ./NetMHCpan4.1_directory/netMHCpan ./PATH/TO/YOUR_MHCvalidator_FOLDER/venv/bin
 ```
