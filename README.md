@@ -3,11 +3,8 @@ Validation of peptide-spectrum matches from mass spectrometry-based immunopeptid
 MHC interaction/presentation predictors into the discriminant function.
 
 ### Installing MHCvalidator
+On your Linux machine, create a virtual envirmonment with the python IDE (Integrated Develoment Enviroment) of your choice. In the example PyCharm was used. The you can clone MHcvalidator from the CaronLab github page, install required packages and MHCvalidator as follows:
 
-Install all packages from the requirments.txt in this repo by 
-
-The you can install MHCvalidator in your virtual environment by pulling from GitHub as follows
-(For example open a new PyCharm project with a virtual environment)
 ```python
 ## in terminal console run
 git clone https://github.com/CaronLab/mhc-validator
