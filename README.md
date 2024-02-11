@@ -19,8 +19,9 @@ Now in order to fully use MHCvalidators capacity to implement MHC binding affini
 Do install NetMHCpan4.1 you have to go to 'https://services.healthtech.dtu.dk/cgi-bin/sw_request?software=netMHCpan&version=4.1&packageversion=4.1b&platform=Linux' and download NetMHCpan4.1 for Linux as described on the website. A general overview of  NetMHCpan4.1 can be found here: 'https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/'. 
 
 After downloading NetMHCpan4.1 install as instructed in the readme file provided in the NetMHCpan4.1 download folder. When installed and tested on your local machine, copy the 'netMHCpan' file to the following folder:
+```terminal
 ../YOUR_MHCvalidator_FOLDER/venv/bin
-
+```
 Now MHCvalidator can use NetMHCpan4.1 to make predictions and be used to its full potential.
 
 ### Very very basic tutorial
