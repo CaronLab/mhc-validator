@@ -8,13 +8,14 @@ Install all packages from the requirments.txt in this repo by
 
 The you can install MHCvalidator in your virtual environment by pulling from GitHub as follows
 (For example open a new PyCharm project with a virtual environment)
-
-''' in terminal console run
+```python
+## in terminal console run
 git clone https://github.com/CaronLab/mhc-validator
 pip install -r mhc-validator/requirements.txt
 pip install ./mhc-validator
-'''
-The aboove should install MHCvalidator. Now in order to fully use MHCvalidators capacity to implement MHC binding affinities you will have to manually install NetMHCpan4.1. You can run MHCvalidator without it by using only MHCflurry (Which was installed from the requirments.txt), but as described in our publication we suggest to also use NetMHCpan4.1 to achieve the full potential of MHCvalidator. 
+```
+The above should install MHCvalidator. 
+Now in order to fully use MHCvalidators capacity to implement MHC binding affinities you will have to manually install NetMHCpan4.1. You can run MHCvalidator without it by using only MHCflurry (Which was installed from the requirments.txt), but as described in our publication we suggest to also use NetMHCpan4.1 to achieve the full potential of MHCvalidator. 
 Do install NetMHCpan4.1 you have to go to 'https://services.healthtech.dtu.dk/cgi-bin/sw_request?software=netMHCpan&version=4.1&packageversion=4.1b&platform=Linux' and download NetMHCpan4.1 for Linux as described on the website. A general overview of  NetMHCpan4.1 can be found here: 'https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/'. 
 
 
