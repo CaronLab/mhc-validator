@@ -22,7 +22,7 @@ cp ./NetMHCpan4.1_directory/netMHCpan ./PATH/TO/YOUR_MHCvalidator_FOLDER/venv/bi
 ```
 Now MHCvalidator can use NetMHCpan4.1 to make predictions and be used to its full potential.
 
-### Tutorial to use MHCvalidator based on an example file
+### Tutorial to use MHCvalidator based on an example experiment
 
 The first step is to create a new python file (example: mhcvalidator_test.py) in you venv, then set parameters and load data (database search results in PIN format). In this example we use the data provided in the github.com/CaronLab/mhc-validator master branch that you pulled earlier. In other words you have the data already downloaded and everything shoul dbe ready to go!
 
@@ -38,7 +38,6 @@ import os
 # Query the sample data from the mhc-validator folder that you pulled from GitHub which contains the data:
 sample_folder = Path(os.getcwd()+f'/mhc-validator')
 pins = [p for p in sample_folder.glob('*.pin') ]
-samples = [pin.stem for pin in pins]
 ```
 2. Open an MHCvalidator instance and set alleles:
 ```python
@@ -56,7 +55,9 @@ for pin in pins:
     validator.run(sequence_encoding=True, netmhcpan=True, mhcflurry=True, report_directory=sample_folder / f'{pin.stem}_MhcValidator') #Note that we add all available predictions implemented by setting configurations to 'True'. You can change these configurations as detailed below.
 ```
 
-4. Now you shoul dfind the results in two seperate folders named after your .pin file. The peptide results table that you will be mostly interested in (.tsv format) is named 'PIN_FILE_NAME.MhcValidator_annotated.tsv'. These peptide results can now be used to study your samples as you normally would.
+4. Now you should find the results in two seperate folders named after your .pin file. The peptide results table that you will be mostly interested in (.tsv format) is named 'PIN_FILE_NAME.MhcValidator_annotated.tsv'. These peptide results can now be used to study your samples as you normally would.
+
+### Additional infomration
 
 Note that in step 3. , we used the default configuration that implies MHCflurry and NetMHCpan4.1 predictions. MHCvalidator is built to be used with a multitude of configurations which are described below:
 
