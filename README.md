@@ -28,16 +28,38 @@ The first step is to create a new python file (example: mhcvalidator_test.py) in
 
 Below are several examples explaining how to run MHCvalidator in python 3.10 using the example .pin data that you automatically downloaded with the MHCvalidator package:
 
-
+1. Access example data and import MHCvalidator:
 ```python
-from mhcvalidator import MhcValidator
+# import requirements
+from mhcvalidator.validator import MhcValidator
+from pathlib import Path
+import os
 
+# Query the sample data from the mhc-validator folder that you pulled from GitHub which contains the data:
+sample_folder = Path(os.getcwd()+f'/mhc-validator')
+pins = [p for p in sample_folder.glob('*.pin') ]
+samples = [pin.stem for pin in pins]
+```
+2. Open an MHCvalidator instance and set alleles:
+```python
+# Open a MHCvalidator instance:
 validator = MhcValidator()
-validator.set_mhc_params(['A0201', 'B0702'])  # optional if MhcFlurry and NetMHCpan are not being used
-validator.load_data('/path/to/pin_file.pin')
+# Set alleles that are applicable to your experiments/data, in our case the following three are applicable:
+alleles = ['HLA-A0201', 'HLA-B0702', 'HLA-C0702']
 ```
 
-Next is to run:
+3. Run MHCvalidator for each pin file seperately:
+```python
+for pin in pins:
+    validator.load_data(pin)
+    validator.set_mhc_params(alleles=alleles)
+    validator.run(sequence_encoding=True, netmhcpan=True, mhcflurry=True, report_directory=sample_folder / f'{pin.stem}_MhcValidator') #Note that we add all available predictions implemented by setting configurations to 'True'. You can change these configurations as detailed below.
+```
+
+4. Now you shoul dfind the results in two seperate folders named after your .pin file. The peptide results table that you will be mostly interested in (.tsv format) is named 'PIN_FILE_NAME.MhcValidator_annotated.tsv'. These peptide results can now be used to study your samples as you normally would.
+
+Note that in step 3. , we used the default configuration that implies MHCflurry and NetMHCpan4.1 predictions. MHCvalidator is built to be used with a multitude of configurations which are described below:
+
 ```python
 # To run in "MV" configuration (fully connected neural 
 # network with no extra features added to input), do this:
