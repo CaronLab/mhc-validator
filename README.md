@@ -42,10 +42,8 @@ import os
 sample_folder = Path(os.getcwd()+f'/mhc-validator')
 pins = [p for p in sample_folder.glob('*.pin') ]
 ```
-2. Open an MHCvalidator instance and set alleles:
+2. Set alleles:
 ```python
-# Open a MHCvalidator instance:
-validator = MhcValidator()
 # Set alleles that are applicable to your experiments/data, in our case the following three are applicable:
 alleles = ['HLA-A0201', 'HLA-B0702', 'HLA-C0702']
 ```
@@ -53,12 +51,15 @@ alleles = ['HLA-A0201', 'HLA-B0702', 'HLA-C0702']
 3. Run MHCvalidator for each pin file seperately:
 ```python
 for pin in pins:
-    validator.load_data(pin)
-    validator.set_mhc_params(alleles=alleles)
-    validator.run(sequence_encoding=True, netmhcpan=True, mhcflurry=True, report_directory=sample_folder / f'{pin.stem}_MhcValidator') #Note that we add all available predictions implemented by setting configurations to 'True'. You can change these configurations as detailed below.
+    validator = MhcValidator() # Open a MHCvalidator instance, a new one has to be opened for each .pin file
+    validator.load_data(pin) # Load the pin file
+    validator.set_mhc_params(alleles=alleles) # Load the alleles you specified above
+    validator.run(sequence_encoding=True, netmhcpan=True, mhcflurry=True, report_directory=sample_folder / f'{pin.stem}_MhcValidator') #Run MHCvalidator, note that we added all available predictions by setting all configurations to 'True'. You can change these configurations as detailed below if for some reason you want to.
 ```
 
-4. Now you should find the results in two seperate folders named after your .pin file. The peptide results table that you will be mostly interested in (.tsv format) is named 'PIN_FILE_NAME.MhcValidator_annotated.tsv'. These peptide results can now be used to study your samples as you normally would.
+4. Now you should find the results in the mhc-validator folder that you pulled from GitHub. Here you find two seperate folders named after the .pin files you analyzed. The peptide results table that you will be mostly interested in (.tsv format) is named 'PIN_FILE_NAME.MhcValidator_annotated.tsv'. These peptide results can now be used to study your samples as you normally would. You can also find a .pdf file depicting the training report.
+
+5. You can compare your results to our results, our results folders for each pin file are annotated with the suffix '_default_analysis'.
 
 ### Additional information
 
