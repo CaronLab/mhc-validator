@@ -48,7 +48,7 @@ pins = [p for p in sample_folder.glob('*.pin') ]
 alleles = ['HLA-A0201', 'HLA-B0702', 'HLA-C0702']
 ```
 
-3. Run MHCvalidator for each pin file seperately:
+3. Run MHCvalidator for each pin file seperately, this might take up to 5minutes for each pin file:
 ```python
 for pin in pins:
     validator = MhcValidator() # Open a MHCvalidator instance, a new one has to be opened for each .pin file
@@ -56,6 +56,7 @@ for pin in pins:
     validator.set_mhc_params(alleles=alleles) # Load the alleles you specified above
     validator.run(sequence_encoding=True, netmhcpan=True, mhcflurry=True, report_directory=sample_folder / f'{pin.stem}_MhcValidator') #Run MHCvalidator, note that we added all available predictions by setting all configurations to 'True'. You can change these configurations as detailed below if for some reason you want to.
 ```
+If you get a warning that your GPU is not connected (CUUDA warning) from MHCflurry, you can simply ignore that wanring since the gain in analysis speed is minimal.
 
 4. Now you should find the results in the mhc-validator folder that you pulled from GitHub. Here you find two seperate folders named after the .pin files you analyzed. The peptide results table that you will be mostly interested in (.tsv format) is named 'PIN_FILE_NAME.MhcValidator_annotated.tsv'. These peptide results can now be used to study your samples as you normally would. You can also find a .pdf file depicting the training report.
 
