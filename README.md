@@ -57,7 +57,7 @@ for pin in pins:
 
 4. Now you should find the results in two seperate folders named after your .pin file. The peptide results table that you will be mostly interested in (.tsv format) is named 'PIN_FILE_NAME.MhcValidator_annotated.tsv'. These peptide results can now be used to study your samples as you normally would.
 
-### Additional infomration
+### Additional information
 
 Note that in step 3. , we used the default configuration that implies MHCflurry and NetMHCpan4.1 predictions. MHCvalidator is built to be used with a multitude of configurations which are described below:
 
