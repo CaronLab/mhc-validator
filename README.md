@@ -11,7 +11,7 @@ git clone https://github.com/CaronLab/mhc-validator
 pip install -r mhc-validator/requirements.txt
 pip install ./mhc-validator
 ```
-The above should install MHCvalidator. 
+The above should install MHCvalidator and the installation should not take more than 10minutes, depending on your interent connection it could tak elonger to pull the folder. 
 Now in order to fully use MHCvalidators capacity to implement MHC binding affinities you will have to manually install NetMHCpan4.1 on your machine. You can run MHCvalidator without it by using only MHCflurry (Which was installed from the requirements.txt), but as described in our publication we suggest to also use NetMHCpan4.1 to achieve the full potential of MHCvalidator. 
 To install NetMHCpan4.1, you have to go to 'https://services.healthtech.dtu.dk/cgi-bin/sw_request?software=netMHCpan&version=4.1&packageversion=4.1b&platform=Linux' and download NetMHCpan4.1 for Linux (Version 4.1b) as described on the website. A general overview of  NetMHCpan4.1 can be found here: 'https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/'. 
 
