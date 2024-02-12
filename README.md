@@ -24,7 +24,7 @@ Now MHCvalidator can use NetMHCpan4.1 to make predictions and be used to its ful
 
 ### Tutorial to use MHCvalidator based on an example experiment
 
-The first step is to create a new python file (example: mhcvalidator_test.py) in you venv, then set parameters and load data (database search results in PIN format). In this example we use the data provided in the github.com/CaronLab/mhc-validator master branch that you pulled earlier. In other words you have the data already downloaded and everything shoul dbe ready to go!
+The first step is to create a new python file (example: mhcvalidator_test.py) in you venv, then set parameters and load data (database search results in PIN format). In this example we use the data provided in the github.com/CaronLab/mhc-validator master branch that you pulled earlier. In other words you have the data already downloaded and everything should be ready to go!
 
 Note: The example data are from the JY serial dilution experiment (Dilution point 3, 4 fold dilution, Figure 3D) described in our publication ('Integrating Machine Learning-Enhanced Immunopeptidomics and SARS-CoV-2 Population-Scale Analyses Unveils Novel Antigenic Features for Next-Generation COVID-19 Vaccines')
 
