@@ -3,6 +3,8 @@ Validation of peptide-spectrum matches from mass spectrometry-based immunopeptid
 MHC interaction/presentation predictors into the discriminant function.
 
 ### Installing MHCvalidator
+
+Note: Tu run mhc-validator, it is recommended to use the comet search engine to create .pin files for mhc-validator. How to setup the pipeline is described on the wiki page (https://github.com/CaronLab/mhc-validator/wiki) together with a lay-term description of mhc-validator.
 On your Linux machine, create a virtual envirmonment with the python IDE (Integrated Develoment Enviroment) of your choice. In the example PyCharm with python 3.10 was used. Then you can clone MHcvalidator from the CaronLab github page, install required packages and MHCvalidator as follows:
 
 ```python
@@ -89,4 +91,3 @@ validator.run(sequence_encoding=True, netmhcpan=True, mhcflurry=True)
 validator.run(report_directory="/path/to/results/directory")
 ```
 
-You can also find a high level description of how mhc-validator and it's configurations work in the wiki page here: https://github.com/CaronLab/mhc-validator/wiki. 
