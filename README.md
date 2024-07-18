@@ -4,7 +4,9 @@ MHC interaction/presentation predictors into the discriminant function.
 
 ### Installing MHCvalidator
 
-Note: Tu run mhc-validator, it is recommended to use the comet search engine to create .pin files for mhc-validator. How to setup the pipeline is described on the wiki page (https://github.com/CaronLab/mhc-validator/wiki) together with a lay-term description of mhc-validator.
+Note: Tu run mhc-validator, it is recommended to use the comet search engine to create .pin files for mhc-validator. How to setup the pipeline is described on the wiki page (https://github.com/CaronLab/mhc-validator/wiki) together with a lay-term description of mhc-validator. If you already know how to use comet and/or create your own percolator input files (.pin files) please go ahead with the instructions for how to install mhc-validator below: 
+
+
 On your Linux machine, create a virtual envirmonment with the python IDE (Integrated Develoment Enviroment) of your choice. In the example PyCharm with python 3.10 was used. Then you can clone MHcvalidator from the CaronLab github page, install required packages and MHCvalidator as follows:
 
 ```python
