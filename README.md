@@ -88,3 +88,5 @@ validator.run(sequence_encoding=True, netmhcpan=True, mhcflurry=True)
 # For example:
 validator.run(report_directory="/path/to/results/directory")
 ```
+
+You can also find a high level description of how mhc-validator and it's configurations work in the wiki page here https://github.com/CaronLab/mhc-validator/wiki. 
