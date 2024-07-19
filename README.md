@@ -1,13 +1,12 @@
 # mhc-validator
-Validation of peptide-spectrum matches from mass spectrometry-based immunopeptidomics experiments integrating both database search metrics and
-MHC interaction/presentation predictors into the discriminant function.
+Mhc-validator is a machine learning software tool that is used for the validation of peptide-spectrum matches from mass spectrometry-based immunopeptidomics experiments. Mhc-validator integrates both database search metrics and MHC interaction/presentation predictors into the discriminant function.
 
 ### Installing MHCvalidator
 
-Note: Tu run mhc-validator, it is recommended to use the comet search engine to create .pin files for mhc-validator. How to setup the pipeline is described on the wiki page (https://github.com/CaronLab/mhc-validator/wiki) together with a lay-term description of mhc-validator. If you already know how to use comet and/or create your own percolator input files (.pin files) please go ahead with the instructions for how to install mhc-validator below: 
+Note: To run mhc-validator, it is recommended to use the comet search engine to create .pin files for mhc-validator. How to setup the analysis pipeline from A-Z is described on the wiki page (https://github.com/CaronLab/mhc-validator/wiki) together with a lay-term description of mhc-validator. If you already know how to use the comet database search engine and/or create your own percolator input files (.pin files), please jump right to the instructions below explaining how to install mhc-validator: 
 
 
-On your Linux machine, create a virtual envirmonment with the python IDE (Integrated Develoment Enviroment) of your choice. In the example PyCharm with python 3.10 was used. Then you can clone MHcvalidator from the CaronLab github page, install required packages and MHCvalidator as follows:
+On your Linux machine, create a virtual envirmonment with the python IDE (Integrated Develoment Enviroment) of your choice. In this example PyCharm with python 3.10 was used. Then you can clone MHcvalidator from the CaronLab github page, install required packages and MHCvalidator as follows:
 
 ```python
 ## in your virtual environment terminal console run
@@ -30,10 +29,10 @@ Now MHCvalidator can use NetMHCpan4.1 to make predictions and be used to its ful
 
 The first step is to create a new python file (example: mhcvalidator_test.py) in you venv, then set parameters and load data (database search results in PIN format). In this example we use the data provided in the github.com/CaronLab/mhc-validator master branch that you pulled earlier. In other words you have the data already downloaded and everything should be ready to go!
 
-Note: The example data are from the JY serial dilution experiment (Dilution point 3, 4 fold dilution, Figure 3D) described in our publication ('Integrating Machine Learning-Enhanced Immunopeptidomics and SARS-CoV-2 Population-Scale Analyses Unveils Novel Antigenic Features for Next-Generation COVID-19 Vaccines')
+Note: The example data are from the JY serial dilution experiment (Dilution point 3, which is a 4 fold dilution of the original sample) described in our publication ('Integrating Machine Learning-Enhanced Immunopeptidomics and SARS-CoV-2 Population-Scale Analyses Unveils Novel Antigenic Features for Next-Generation COVID-19 Vaccines')
 
 
-Below is the tutorial explaining how to run MHCvalidator in python 3.10 using the example .pin data that you automatically downloaded with the MHCvalidator package:
+In order to run MHCvalidator in python 3.10 using the example .pin data that you automatically downloaded with the MHCvalidator package, you can do as follows:
 
 1. Access example data and import MHCvalidator:
 ```python
