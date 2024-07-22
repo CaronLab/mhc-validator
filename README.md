@@ -1,7 +1,7 @@
 # mhc-validator
 Mhc-validator is a machine learning software tool that is used for the validation of peptide-spectrum matches from mass spectrometry-based immunopeptidomics experiments. Mhc-validator integrates both database search metrics and MHC interaction/presentation predictors into the discriminant function.
 
-### Installing MHC-validator
+### Installing mhc-validator
 
 Note: To run mhc-validator, it is recommended to use the comet search engine to create .pin files for mhc-validator. How to setup the analysis pipeline from A-Z is described on the wiki page (https://github.com/CaronLab/mhc-validator/wiki) together with a lay-term description of mhc-validator. If you already know how to use the comet database search engine and/or create your own percolator input files (.pin files), please jump right to the instructions below explaining how to install mhc-validator: 
 
@@ -25,7 +25,7 @@ cp ./NetMHCpan4.1_directory/netMHCpan ./PATH/TO/YOUR_MHCvalidator_FOLDER/venv/bi
 ```
 Now MHCvalidator can use NetMHCpan4.1 to make predictions and be used to its full potential.
 
-### Tutorial to use MHCvalidator based on an example experiment
+### Tutorial to use mhc-validator based on an example experiment
 
 The first step is to create a new python file (example: mhcvalidator_test.py) in your virtual environment (venv), then set the search parameters and load the input-data (database search results in PIN format). In this example, we use the data provided in the github.com/CaronLab/mhc-validator master branch that you pulled earlier. In other words, you have the data already downloaded and everything should be ready to go!
 
@@ -34,7 +34,7 @@ Note: The example data are from the JY serial dilution experiment (dilution poin
 
 In order to run MHCvalidator in python 3.10 using the example .pin data that you automatically downloaded with the MHCvalidator package, you can do as follows:
 
-1. Access example data and import MHCvalidator:
+1. Access example data and import mhc-validator:
 ```python
 # import requirements
 from mhcvalidator.validator import MhcValidator
@@ -51,7 +51,7 @@ pins = [p for p in sample_folder.glob('*.pin') ]
 alleles = ['HLA-A0201', 'HLA-B0702', 'HLA-C0702']
 ```
 
-3. Run MHCvalidator for each pin file seperately, this might take up to 5 minutes for each pin file:
+3. Run mhc-validator for each pin file seperately, this might take up to 5 minutes for each pin file:
 ```python
 for pin in pins:
     validator = MhcValidator() # Open a MHCvalidator instance, a new one has to be opened for each .pin file
@@ -67,7 +67,7 @@ If you get a warning that your GPU is not connected (CUUDA warning) from MHCflur
 
 ### Additional information
 
-Note that in step 3. , we used the default configuration that implies MHCflurry and NetMHCpan4.1 predictions. MHCvalidator is built to be used with a multitude of configurations which are described below:
+Note that in step 3. , we used the default configuration that implies MHCflurry and NetMHCpan4.1 predictions. mhc-validator is built to be used with a multitude of configurations which are described below:
 
 ```python
 # To run in "MV" configuration (fully connected neural 
