@@ -6,7 +6,7 @@ Mhc-validator is a machine learning software tool that is used for the validatio
 Note: To run mhc-validator, it is recommended to use the comet search engine to create .pin files for mhc-validator. How to setup the analysis pipeline from A-Z is described on the wiki page (https://github.com/CaronLab/mhc-validator/wiki) together with a lay-term description of mhc-validator. If you already know how to use the comet database search engine and/or create your own percolator input files (.pin files), please jump right to the instructions below explaining how to install mhc-validator: 
 
 
-On your Linux machine, create a virtual envirmonment with the python IDE (Integrated Develoment Enviroment) of your choice. In this example PyCharm with python 3.10 was used. Then you can clone MHcvalidator from the CaronLab github page, install required packages and MHCvalidator as follows:
+On your Linux machine, create a virtual environment with the python IDE (Integrated Develoment Enviroment) of your choice. In this example PyCharm with python 3.10 was used. Then you can clone MHcvalidator from the CaronLab github page, install required packages and MHCvalidator as follows:
 
 ```python
 ## in your virtual environment terminal console run
@@ -14,8 +14,8 @@ git clone https://github.com/CaronLab/mhc-validator
 pip install -r mhc-validator/requirements.txt
 pip install ./mhc-validator
 ```
-The above should install MHCvalidator and the installation should not take more than 10minutes, depending on your interent connection it could take longer to pull the folder. 
-Now in order to fully use MHCvalidators capacity to implement MHC binding affinities you will have to manually install NetMHCpan4.1 on your machine. You can run MHCvalidator without it by using only MHCflurry (Which was installed from the requirements.txt), but as described in our publication we suggest to also use NetMHCpan4.1 to achieve the full potential of MHCvalidator. 
+The above should install MHCvalidator and the installation should not take more than 10 minutes, depending on your internet connection it could take longer to pull the folder. 
+Now in order to fully use MHCvalidator's capacity to implement MHC binding affinities you will have to manually install NetMHCpan4.1 on your machine. You can run MHCvalidator without it by using only MHCflurry (which was installed from the requirements.txt), but as described in our publication we suggest to also use NetMHCpan4.1 to achieve the full potential of MHCvalidator. 
 To install NetMHCpan4.1, you have to go to 'https://services.healthtech.dtu.dk/cgi-bin/sw_request?software=netMHCpan&version=4.1&packageversion=4.1b&platform=Linux' and download NetMHCpan4.1 for Linux (Version 4.1b) as described on the website. A general overview of  NetMHCpan4.1 can be found here: 'https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/'. 
 
 After downloading NetMHCpan4.1, install the software as instructed in the readme file provided in the NetMHCpan4.1 download folder. When installed and tested on your local machine, copy the 'netMHCpan' file to the following folder: ./YOUR_MHCvalidator_FOLDER/venv/bin , for example you can do as follows:
@@ -27,9 +27,9 @@ Now MHCvalidator can use NetMHCpan4.1 to make predictions and be used to its ful
 
 ### Tutorial to use MHCvalidator based on an example experiment
 
-The first step is to create a new python file (example: mhcvalidator_test.py) in you venv, then set parameters and load data (database search results in PIN format). In this example we use the data provided in the github.com/CaronLab/mhc-validator master branch that you pulled earlier. In other words you have the data already downloaded and everything should be ready to go!
+The first step is to create a new python file (example: mhcvalidator_test.py) in your virtual environment (venv), then set the search parameters and load the input-data (database search results in PIN format). In this example, we use the data provided in the github.com/CaronLab/mhc-validator master branch that you pulled earlier. In other words, you have the data already downloaded and everything should be ready to go!
 
-Note: The example data are from the JY serial dilution experiment (Dilution point 3, which is a 4 fold dilution of the original sample) described in our publication ('Integrating Machine Learning-Enhanced Immunopeptidomics and SARS-CoV-2 Population-Scale Analyses Unveils Novel Antigenic Features for Next-Generation COVID-19 Vaccines')
+Note: The example data are from the JY serial dilution experiment (dilution point 3, which is a 4-fold dilution of the original sample) described in our publication ('Integrating Machine Learning-Enhanced Immunopeptidomics and SARS-CoV-2 Population-Scale Analyses Unveils Novel Antigenic Features for Next-Generation COVID-19 Vaccines').
 
 
 In order to run MHCvalidator in python 3.10 using the example .pin data that you automatically downloaded with the MHCvalidator package, you can do as follows:
@@ -51,7 +51,7 @@ pins = [p for p in sample_folder.glob('*.pin') ]
 alleles = ['HLA-A0201', 'HLA-B0702', 'HLA-C0702']
 ```
 
-3. Run MHCvalidator for each pin file seperately, this might take up to 5minutes for each pin file:
+3. Run MHCvalidator for each pin file seperately, this might take up to 5 minutes for each pin file:
 ```python
 for pin in pins:
     validator = MhcValidator() # Open a MHCvalidator instance, a new one has to be opened for each .pin file
@@ -61,9 +61,9 @@ for pin in pins:
 ```
 If you get a warning that your GPU is not connected (CUUDA warning) from MHCflurry, you can simply ignore that wanring since the gain in analysis speed is minimal.
 
-4. Now you should find the results in the mhc-validator folder that you pulled from GitHub. Here you find two seperate folders named after the .pin files you analyzed. The peptide results table that you will be mostly interested in (.tsv format) is named 'PIN_FILE_NAME.MhcValidator_annotated.tsv'. These peptide results can now be used to study your samples as you normally would. You can also find a .pdf file depicting the training report.
+4. Now you should find the results in the mhc-validator folder that you pulled from GitHub. Here you find two seperate folders named after the .pin files you analyzed. The peptide results table that you will be most interested in (.tsv format) is named 'PIN_FILE_NAME.MhcValidator_annotated.tsv'. These peptide results can now be used to study your samples as you normally would. You can also find a .pdf file depicting the training report.
 
-5. You can compare your results to our results, our results folders for each pin file are annotated with the suffix '_default_analysis'.
+5. You can compare your results to our results which are annotated with the suffix '_default_analysis' for each .pin file.
 
 ### Additional information
 
