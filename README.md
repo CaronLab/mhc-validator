@@ -1,7 +1,7 @@
 # mhc-validator
 Mhc-validator is a machine learning software tool that is used for the validation of peptide-spectrum matches from mass spectrometry-based immunopeptidomics experiments. Mhc-validator integrates both database search metrics and MHC interaction/presentation predictors into the discriminant function.
 
-### Installing MHCvalidator
+### Installing MHC-validator
 
 Note: To run mhc-validator, it is recommended to use the comet search engine to create .pin files for mhc-validator. How to setup the analysis pipeline from A-Z is described on the wiki page (https://github.com/CaronLab/mhc-validator/wiki) together with a lay-term description of mhc-validator. If you already know how to use the comet database search engine and/or create your own percolator input files (.pin files), please jump right to the instructions below explaining how to install mhc-validator: 
 
