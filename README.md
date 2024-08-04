@@ -91,4 +91,7 @@ validator.run(sequence_encoding=True, netmhcpan=True, mhcflurry=True)
 # For example:
 validator.run(report_directory="/path/to/results/directory")
 ```
+### Troubleshooting information
+
+If you get error messages while installing mhc-validator that are related to the version numbers of tensorflow or other packages, please go ahead and install the required package versions that are compatible with each other. We reported few issues with this but installing the suggested versions usually works out fine. Please do not hesitate to contact us via the contact information provided in our publication if you run into more serious issues.
 
