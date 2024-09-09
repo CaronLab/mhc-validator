@@ -1,3 +1,4 @@
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.8475.svg)](https://doi.org/10.5281/zenodo.8475)
 # mhc-validator
 Mhc-validator is a machine learning software tool that is used for the validation of peptide-spectrum matches from mass spectrometry-based immunopeptidomics experiments. Mhc-validator integrates both database search metrics and MHC interaction/presentation predictors into the discriminant function.
 
