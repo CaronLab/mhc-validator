@@ -44,6 +44,9 @@ from mhcvalidator.rt_prediction import extract_rt
 from mhcvalidator.pepxml_parser import pepxml_to_mhcv
 from mhcvalidator.datasets import k_fold_split
 
+from predict_rts import predict_rts
+from add_rts import add_dRTs
+
 deprecation._PRINT_DEPRECATION_WARNINGS = False
 
 # This can be uncommented to prevent the GPU from getting used.
@@ -468,16 +471,18 @@ class MhcValidator:
             print(f'Unable to run MhcFlurry.'
                   f'{" See exception information above." if verbose_errors else ""}')
 
-    def make_autort_predictions(self,
+
+    def add_rt_predictions(self,
                                 mzml_file: Union[str, PathLike],
                                 scan_list: List[int] = None,
                                 epochs_for_prerun: int = 5,
-                                qvalue_for_training: float = 0.01,
+                                qvalue_for_training: float = 0.001,
                                 add_to_feature_matrix: bool = True,
+                                rt_prediction_method: str = 'iRT_prosit24',
                                 force: bool = False):
         if (self._mhcflurry_predictions or self._netmhcpan_predictions) and not force:
             raise ValueError('MhcFlurry or NetMHCpan predictions have been added to the feature matrix. It is '
-                             'recommended that you add AutoRT features prior to MHC predictions. To run anyway, '
+                             'recommended that you add RT features prior to MHC predictions. To run anyway, '
                              'set the `force` argument to True.')
 
         if scan_list is None:
@@ -486,23 +491,19 @@ class MhcValidator:
 
         print('Running initial validation to get training set.')
         self.run(model=self.get_nn_model(), epochs=epochs_for_prerun, verbose=0, visualize=False)
-        train_peptides = self.raw_data.loc[(self.qs <= qvalue_for_training) & (self.labels == 1), 'Peptide'].values
+        #train_peptides = self.raw_data.loc[(self.qs <= qvalue_for_training) & (self.labels == 1), 'Peptide'].values
         train_rts = observed_rts[(self.qs <= qvalue_for_training) & (self.labels == 1)]
         max_rt = int(np.ceil(max(observed_rts)))
 
-        predicted_rts = train_predict_rt(self.raw_data['Peptide'].values, train_peptides, train_rts,
-                                         max_retention_time=max_rt, encode_modifications=True)
+        predicted_rts = predict_rts(self.raw_data['Peptide'].values)[rt_prediction_method]
 
         self.obs_rts = observed_rts
         self.pred_rts = predicted_rts
+        self.raw_data = add_drts(self.raw_data,self.obs_rts,self.pred_rts, qvalue_for_training)
 
         if add_to_feature_matrix:
-            self.raw_data['mhcv_observed_rt'] = observed_rts
-            self.raw_data['mhcv_predicted_rt'] = predicted_rts
-            self.raw_data['rel_rt_error'] = (predicted_rts - observed_rts) / observed_rts
-            self.raw_data['rt_error'] = predicted_rts - observed_rts
-            self.feature_matrix['rel_rt_error'] = (predicted_rts - observed_rts) / observed_rts
-            self.feature_matrix['rt_error'] = predicted_rts - observed_rts
+            self.feature_matrix['rt_error'] = self.raw_data['delta_rt']
+            self.feature_matrix['rel_rt_error'] = self.raw_data['rel_delta_rt']
 
         self._retention_time_features = True
 
