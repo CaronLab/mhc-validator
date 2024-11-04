@@ -88,9 +88,9 @@ validator.run(sequence_encoding=True)
 validator.run(sequence_encoding=True, netmhcpan=True, mhcflurry=True)
 
 # To add retention time predictions to the model you have to provide the corresponding .mzML file and
-# the function below to calculate retention time errors using the prosit rention time predictor as follows:
+# the function below to calculate retention time errors using the prosit retention time predictor as follows:
 validator.add_rt_predictions(mzml_file=str(path_to_mzml_file),rt_prediction_method='iRT_prosit')
-#Then you can run the validator object as you normally would (See below for MV+APP+PE+RT):
+# Then you can run the validator object as you normally would (See below for MV+APP+PE+RT):
 validator.run(sequence_encoding=True, netmhcpan=True, mhcflurry=True)
 # or as MV+PE+RT (Useful if you don't know the alleles in your sample):
 validator.run(sequence_encoding=True)
