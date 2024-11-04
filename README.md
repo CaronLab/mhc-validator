@@ -75,7 +75,7 @@ Note that in step 3. , we used the default configuration that implies MHCflurry 
 # network with no extra features added to input), do this:
 validator.run()
 
-# To run in "MV+MHC" configuration (fully connected neural network 
+# To run in "MV+APP" configuration (fully connected neural network 
 # with NetMHCpan and/or MHCFlurry predictions added to the standard PIN features), do this:
 validator.run(netmhcpan=True, mhcflurry=True)
 
@@ -83,9 +83,19 @@ validator.run(netmhcpan=True, mhcflurry=True)
 # and then feeds into a fully connected neural network with the standard PIN features), do this:
 validator.run(sequence_encoding=True)
 
-# To run in MV+MHC+PE configuration (same as MV+PE, but also with NetMHCpan and/or MhcFlurry predictions added 
+# To run in MV+APP+PE configuration (same as MV+PE, but also with NetMHCpan and/or MhcFlurry predictions added 
 # to the standard PIN features), do this:
 validator.run(sequence_encoding=True, netmhcpan=True, mhcflurry=True)
+
+# To add retention time predictions to the model you have to provide the corresponding .mzML file and
+# the function below to calculate retention time errors using the prosit rention time predictor as follows:
+validator.add_rt_predictions(mzml_file=str(path_to_mzml_file),rt_prediction_method='iRT_prosit')
+#Then you can run the validator object as you normally would (See below for MV+APP+PE+RT):
+validator.run(sequence_encoding=True, netmhcpan=True, mhcflurry=True)
+# or as MV+PE+RT (Useful if you don't know the alleles in your sample):
+validator.run(sequence_encoding=True)
+# Note: The retention time feature is not part of our publication, but you can read on the wiki page to
+# see some data on the performance increase when adding retention time predictions to the mhc-validator model.
 
 # An important argument for the `run` function is "report_directory". Setting this tells MhcValidator to
 # save information about the model fitting as well as the predictions results into this directory
