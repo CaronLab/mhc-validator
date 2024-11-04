@@ -43,9 +43,7 @@ from mhcvalidator.rt_prediction import train_predict as train_predict_rt
 from mhcvalidator.rt_prediction import extract_rt
 from mhcvalidator.pepxml_parser import pepxml_to_mhcv
 from mhcvalidator.datasets import k_fold_split
-
-from predict_rts import predict_rts
-from add_rts import add_dRTs
+from mhcvalidator.add_rts import add_dRTs
 
 deprecation._PRINT_DEPRECATION_WARNINGS = False
 
